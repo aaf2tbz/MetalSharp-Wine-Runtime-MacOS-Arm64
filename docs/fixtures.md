@@ -40,3 +40,7 @@ Every fixture-related PR must include:
 - confirmation that no generated or proprietary binary is committed.
 
 When in doubt, generate artifacts in the build directory during tests and commit only source plus expected metadata.
+
+## ARM64X compatibility input
+
+`tests/data/wine-11.12-ntdll-arm64x.txt` contains only sanitized structural expectations. The corresponding Wine DLL is never committed. Where a locally built, legally held Wine input is available, run `pe_arm64x_probe /path/to/ntdll.dll`; the probe reads at most 16 MiB, parses metadata only, and never launches Wine or executes image bytes.

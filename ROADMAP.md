@@ -36,13 +36,13 @@ Status: substantially complete.
 
 ## Milestone 1 — ARM64X metadata and ABI fixture layer
 
-- [ ] Implement a bounds-checked PE32+/ARM64X reader for only the metadata GEM needs.
-- [ ] Parse load configuration, CHPE metadata, code maps, entry-point ranges, and redirections.
-- [ ] Represent target ISA as ARM64, ARM64EC, x64, thunk, fast-forward, data, or invalid.
-- [ ] Add a legal synthetic ARM64X fixture generated from source during tests.
-- [ ] Add sanitized metadata expectations from the current Wine ARM64X ntdll without committing the binary.
-- [ ] Reject overlaps, integer overflow, truncated records, unsorted ranges, and out-of-image pointers.
-- [ ] Add corpus/fuzz entry points for metadata parsing.
+- [x] Implement a bounds-checked PE32+/ARM64X reader for only the metadata GEM needs.
+- [x] Parse load configuration, CHPE metadata, code maps, entry-point ranges, and redirections.
+- [x] Represent target ISA as ARM64, ARM64EC, x64, thunk, fast-forward, data, or invalid.
+- [x] Add a legal synthetic ARM64X fixture generated from source during tests.
+- [x] Add sanitized metadata expectations from the current Wine ARM64X ntdll without committing the binary.
+- [x] Reject overlaps, integer overflow, truncated records, unsorted ranges, and out-of-image pointers.
+- [x] Add corpus/fuzz entry points for metadata parsing.
 
 **Exit gate:** every executable target in the synthetic fixture is classified from metadata without inspecting instruction bytes.
 

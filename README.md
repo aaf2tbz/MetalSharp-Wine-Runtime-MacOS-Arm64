@@ -58,7 +58,7 @@ GEM owns Windows virtual addresses and logical guest protections:
 - safe high addresses may use identity mappings as an optimization;
 - exceptional low addresses, including `0x7ffe0000`, use aliases or engine callbacks;
 - guest-page protections remain independent of the 16 KiB host page size;
-- ARM64X code ranges come from CHPE metadata;
+- ARM64X code ranges come from a bounds-checked, copied-ownership CHPE v1/v2 metadata parser;
 - engines access memory through checked GEM translation APIs unless an identity fast path is proven safe.
 
 ### ARM64EC transitions

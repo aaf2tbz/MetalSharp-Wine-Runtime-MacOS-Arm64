@@ -1,0 +1,21 @@
+# Sanitized, non-executable compatibility evidence (numeric structural facts only).
+# Provenance: Wine 11.12 development source revision 996020f, locally built
+# aarch64-windows ntdll.dll. Generated with:
+#   pe_arm64x_probe /legal/local/path/to/aarch64-windows/ntdll.dll
+# No binary, path, symbol, instruction byte, or digest is committed. These values
+# are deliberately non-secret numeric regression evidence, not a file identity.
+machine=0xaa64
+sections=15
+image_base=0x180000000
+image_size=0x670000
+load_config_rva=0x1029f0
+load_config_size=0x140
+chpe_rva=0x126684
+chpe_version=2
+code_ranges=3
+entry_ranges=1209
+redirections=1209
+code_range=0x10000-0x80e58:arm64
+code_range=0x81000-0xecebc:arm64ec
+code_range=0xed000-0xf3b00:x64
+redirection=0xed000->0xc4e18
