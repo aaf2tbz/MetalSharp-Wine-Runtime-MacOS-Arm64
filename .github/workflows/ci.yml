@@ -24,7 +24,8 @@ jobs:
         with:
           python-version: "3.13"
       - run: python3 tools/ci/check-repository.py
-      - run: python3 -m py_compile tools/ci/check-repository.py
+      - run: python3 tools/ci/test-check-repository.py
+      - run: python3 -m py_compile tools/ci/check-repository.py tools/ci/test-check-repository.py
 
   formatting:
     name: Formatting

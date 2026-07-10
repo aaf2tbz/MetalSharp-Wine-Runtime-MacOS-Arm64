@@ -80,9 +80,12 @@ No static x18-to-x28 substitution and no guessed dispatcher ABI are accepted.
 ├── .github/
 │   ├── workflows/          Pinned-action CI with least-privilege permissions
 │   └── ISSUE_TEMPLATE/     Structured, privacy-safe reports
-├── docs/architecture/
-│   ├── deterministic-vcpu-plan.md
-│   └── gem-abi.md
+├── docs/
+│   ├── architecture/
+│   │   ├── adr/          Accepted ownership architecture records
+│   │   ├── deterministic-vcpu-plan.md
+│   │   └── gem-abi.md
+│   └── fixtures.md       Redistributable fixture policy
 ├── include/metalsharp/gem/ Public GEM interfaces
 ├── src/gem/                Runtime implementation
 ├── tests/                  Deterministic unit/conformance tests
@@ -96,7 +99,7 @@ No static x18-to-x28 substitution and no guessed dispatcher ABI are accepted.
 └── SECURITY.md             Private vulnerability reporting policy
 ```
 
-This repository intentionally excludes Wine prefixes, SDKs, toolchain archives, generated binaries, crash dumps, local diagnostics, and proprietary Windows files.
+This repository intentionally excludes Wine prefixes, SDKs, toolchain archives, generated binaries, crash dumps, local diagnostics, and proprietary Windows files. Fixture contributions must follow [`docs/fixtures.md`](docs/fixtures.md).
 
 ## Tooling
 
@@ -213,6 +216,10 @@ The detailed plan is in [`docs/architecture/deterministic-vcpu-plan.md`](docs/ar
 
 - [GEM ABI contract](docs/architecture/gem-abi.md)
 - [Deterministic virtual-CPU plan](docs/architecture/deterministic-vcpu-plan.md)
+- [Redistributable fixture policy](docs/fixtures.md)
+- [ADR 0001: Engine ownership](docs/architecture/adr/0001-engine-ownership.md)
+- [ADR 0002: Memory ownership](docs/architecture/adr/0002-memory-ownership.md)
+- [ADR 0003: Transition ownership](docs/architecture/adr/0003-transition-ownership.md)
 - [Microsoft ARM64EC ABI conventions](https://learn.microsoft.com/en-us/cpp/build/arm64ec-windows-abi-conventions)
 - [Microsoft ARM64EC assembly and thunk documentation](https://learn.microsoft.com/en-us/windows/arm/arm64ec-abi)
 - [Apple JIT guidance for Apple silicon](https://developer.apple.com/documentation/apple-silicon/porting-just-in-time-compilers-to-apple-silicon)

@@ -10,6 +10,8 @@ int main(void) {
 
     gem_context_initialize(&context, teb, GEM_ISA_ARM64EC);
     assert(gem_context_is_valid(&context));
+    assert(context.layout_version == GEM_CONTEXT_LAYOUT_VERSION);
+    assert(context.context_size == GEM_THREAD_CONTEXT_EXPECTED_SIZE);
     assert(context.x[18] == teb);
     assert(context.teb == teb);
     assert(strcmp(gem_stop_reason_name(GEM_STOP_ARCH_TRANSITION), "architecture-transition") == 0);
@@ -18,6 +20,12 @@ int main(void) {
     assert(!gem_context_is_valid(&context));
     context.x[18] = teb;
     context.isa = GEM_ISA_INVALID;
+    assert(!gem_context_is_valid(&context));
+    context.isa = GEM_ISA_ARM64EC;
+    context.layout_version = 0;
+    assert(!gem_context_is_valid(&context));
+    context.layout_version = GEM_CONTEXT_LAYOUT_VERSION;
+    context.context_size = GEM_THREAD_CONTEXT_EXPECTED_SIZE - 1U;
     assert(!gem_context_is_valid(&context));
     assert(strcmp(gem_stop_reason_name((enum gem_stop_reason)999), "invalid") == 0);
     return 0;

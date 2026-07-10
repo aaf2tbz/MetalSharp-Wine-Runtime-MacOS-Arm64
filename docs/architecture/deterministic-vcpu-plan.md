@@ -102,6 +102,8 @@ macOS ARM64 process
 
 ## Non-negotiable design rules
 
+Ownership boundaries are recorded in [ADR 0001: Engine Ownership Boundaries](adr/0001-engine-ownership.md), [ADR 0002: Memory Ownership Boundaries](adr/0002-memory-ownership.md), and [ADR 0003: Transition Ownership Boundaries](adr/0003-transition-ownership.md). The rules below are mandatory consequences of those records.
+
 1. A guest PC is never invoked as a native C function pointer in the correctness path.
 2. Darwin x18 is never used as authoritative guest state.
 3. `GuestThreadContext.x18` must equal that thread’s TEB at every guest instruction boundary.

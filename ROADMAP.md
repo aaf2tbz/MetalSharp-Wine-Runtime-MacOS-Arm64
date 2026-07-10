@@ -28,9 +28,9 @@ Status: substantially complete.
 - [x] Add protected `main`, pinned CI actions, formatting, warnings-as-errors, and repository hygiene gates.
 - [x] Publish the deterministic virtual-CPU architecture.
 - [x] Define the initial canonical GEM context.
-- [ ] Add compile-time layout assertions and context serialization versioning.
-- [ ] Add contribution rules for legal, redistributable binary fixtures.
-- [ ] Add architecture decision records for engine ownership, memory ownership, and transition ownership.
+- [x] Add compile-time layout assertions and context serialization versioning.
+- [x] Add contribution rules for legal, redistributable binary fixtures.
+- [x] Add architecture decision records for engine ownership, memory ownership, and transition ownership.
 
 **Exit gate:** ABI and ownership rules are reviewable and machine-tested before an execution engine is introduced.
 
