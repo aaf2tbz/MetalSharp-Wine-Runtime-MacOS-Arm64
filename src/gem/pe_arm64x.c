@@ -583,7 +583,8 @@ static enum gem_pe_status parse_entry_ranges(struct parser_state *state,
         const uint32_t entry = read_u32le_unchecked(state->bytes, offset + 8U);
         struct gem_pe_arm64x_entry_range *range = &image->entry_ranges[i];
 
-        if (start >= end || end > image->summary.size_of_image || entry < start || entry >= end)
+        if (start >= end || end > image->summary.size_of_image ||
+            entry >= image->summary.size_of_image)
             return GEM_PE_ERROR_BAD_CHPE_METADATA;
         if (i > 0U) {
             const struct gem_pe_arm64x_entry_range *previous = &image->entry_ranges[i - 1U];
@@ -592,7 +593,8 @@ static enum gem_pe_status parse_entry_ranges(struct parser_state *state,
             if (start < previous->end_rva)
                 return GEM_PE_ERROR_OVERLAPPING_RANGES;
         }
-        if (!code_range_contains_class(image, start, end, GEM_PE_RVA_X64))
+        if (!code_range_contains_class(image, start, end, GEM_PE_RVA_X64) ||
+            !code_range_contains_any(image, entry, GEM_PE_RVA_ARM64, GEM_PE_RVA_ARM64EC))
             return GEM_PE_ERROR_BAD_CHPE_METADATA;
         range->start_rva = start;
         range->end_rva = end;
