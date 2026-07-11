@@ -19,6 +19,14 @@
         {"name": "mcl", "license": "MIT", "bundled": true, "upstream": "dynarmic/externals/mcl"},
         {"name": "fmt", "license": "MIT", "bundled": true, "upstream": "dynarmic/externals/fmt"}
       ]
+    },
+    "blink": {
+      "repository": "https://github.com/jart/blink.git",
+      "revision": "f006a4fc6f9b8de9272504fdff0dbbe5ce5dc580",
+      "license": "ISC",
+      "source_archive_sha256": "e0bad68ba2927a1ca1d53537afee1644e11a1e683d26676a36e5b9b17a63d6af",
+      "distribution": "planned build-tree-only pinned source/build dependency",
+      "adr": "docs/architecture/adr/0006-x86-tso-correctness-contract.md"
     }
   }
 }

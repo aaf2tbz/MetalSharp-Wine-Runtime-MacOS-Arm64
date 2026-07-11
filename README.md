@@ -118,7 +118,8 @@ This repository intentionally excludes Wine prefixes, SDKs, toolchain archives, 
 - LLVM/Clang and LLD with ARM64EC/ARM64X support
 - LLVM MinGW for Wine’s embedded x86_64 ARM64EC slices
 - Dynarmic 6.7.0 as the reviewed AArch64 virtual-CPU correctness engine (optional fetched build)
-- Blink for x86_64 Windows execution
+- pinned Blink for x86_64 Windows execution, subject to the x86-TSO contract in
+  [`ADR 0006`](docs/architecture/adr/0006-x86-tso-correctness-contract.md)
 - Frida Gum Stalker or QBDI only as validated fast-engine candidates
 - native ARM64 DXMT, Winemetal, and supporting media/audio libraries after runtime gates pass
 
