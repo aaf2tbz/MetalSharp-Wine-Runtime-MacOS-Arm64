@@ -1,0 +1,8 @@
+LIBRARY arm64x_fixture
+EXPORTS
+    fixture_integer
+    fixture_floating
+    fixture_aggregate
+    fixture_variadic
+    fixture_indirect_x64
+    fixture_import_probe

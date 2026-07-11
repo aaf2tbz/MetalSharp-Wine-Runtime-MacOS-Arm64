@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: Apache-2.0
+
+if(NOT DEFINED MSWR_ARM64_REPRO_DIR)
+  message(FATAL_ERROR "MSWR_ARM64_REPRO_DIR must name a build-tree directory")
+endif()
+file(REAL_PATH "${MSWR_ARM64_REPRO_DIR}" arm64_repro_dir)
+file(REAL_PATH "${CMAKE_CURRENT_SOURCE_DIR}" fixture_source_dir)
+cmake_path(IS_PREFIX fixture_source_dir "${arm64_repro_dir}" NORMALIZE repro_in_source)
+if(repro_in_source)
+  message(FATAL_ERROR "ARM64 linker response files must remain outside the source tree")
+endif()
+
+if(BUILD_AS_ARM64X STREQUAL "ARM64")
+  file(MAKE_DIRECTORY "${arm64_repro_dir}")
+  target_link_options(
+    arm64x_fixture PRIVATE
+    "/LINKREPROFULLPATHRSP:${arm64_repro_dir}/arm64x_fixture.rsp")
+elseif(BUILD_AS_ARM64X STREQUAL "ARM64EC")
+  set(repro_file "${arm64_repro_dir}/arm64x_fixture.rsp")
+  if(NOT EXISTS "${repro_file}")
+    message(FATAL_ERROR "ARM64 linker response file is absent: ${repro_file}")
+  endif()
+  file(STRINGS "${repro_file}" arm64_objects REGEX "obj\"$")
+  file(STRINGS "${repro_file}" arm64_definition REGEX "def\"$")
+  file(STRINGS "${repro_file}" arm64_libraries REGEX "lib\"$")
+  string(REPLACE "\"" ";" arm64_objects "${arm64_objects}")
+  string(REPLACE "\"" ";" arm64_libraries "${arm64_libraries}")
+  string(REPLACE "\"" ";" arm64_definition "${arm64_definition}")
+  string(REPLACE "/def:" "/defArm64Native:" arm64_definition "${arm64_definition}")
+  if(NOT arm64_objects OR NOT arm64_definition)
+    message(FATAL_ERROR "ARM64 linker response file lacks object or definition inputs")
+  endif()
+  target_sources(arm64x_fixture PRIVATE ${arm64_objects})
+  target_link_options(
+    arm64x_fixture PRIVATE /machine:arm64x "${arm64_definition}" ${arm64_libraries})
+else()
+  message(FATAL_ERROR "BUILD_AS_ARM64X must be ARM64 or ARM64EC")
+endif()

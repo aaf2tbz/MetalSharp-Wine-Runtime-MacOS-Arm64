@@ -1,0 +1,37 @@
+// SPDX-License-Identifier: Apache-2.0
+#include "fixture_api.h"
+
+#include <stdarg.h>
+#include <windows.h>
+
+#if defined(_M_ARM64EC)
+extern int32_t fixture_x64_target(int32_t value);
+#else
+static int32_t fixture_x64_target(int32_t value) { return value * 3 + 7; }
+#endif
+
+int32_t fixture_integer(int32_t value) { return value + 0x1234; }
+
+double fixture_floating(double value) { return value * 1.5 + 0.25; }
+
+arm64x_fixture_pair fixture_aggregate(arm64x_fixture_pair value) {
+  arm64x_fixture_pair result = {value.second + 11, value.first - 9};
+  return result;
+}
+
+int64_t fixture_variadic(uint32_t count, ...) {
+  int64_t total = 0;
+  uint32_t index;
+  va_list values;
+  va_start(values, count);
+  for (index = 0; index < count; ++index) total += va_arg(values, int32_t);
+  va_end(values);
+  return total;
+}
+
+int32_t fixture_indirect_x64(int32_t value) {
+  int32_t (*volatile target)(int32_t) = fixture_x64_target;
+  return target(value);
+}
+
+uint32_t fixture_import_probe(void) { return GetCurrentProcessId() != 0 ? 1u : 0u; }
