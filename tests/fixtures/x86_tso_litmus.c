@@ -179,13 +179,15 @@ __attribute__((used, noinline)) void worker(long id) {
 
 static long spawn(void *stack, long id) {
     long result;
+    u64 *child_stack = (u64 *)stack;
     volatile u32 *tidptr = &g_tids[id];
     register long r10 __asm__("r10") = (long)tidptr;
     register long r8 __asm__("r8") = 0;
+    *--child_stack = (u64)id;
     __asm__ volatile("syscall\n"
                      "test %%rax,%%rax\n"
                      "jnz 1f\n"
-                     "mov %[id],%%rdi\n"
+                     "pop %%rdi\n"
                      "call worker\n"
                      "mov $60,%%eax\n"
                      "xor %%edi,%%edi\n"
@@ -196,7 +198,7 @@ static long spawn(void *stack, long id) {
                      : "a"(SYS_clone),
                        "D"(CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_THREAD |
                            CLONE_PARENT_SETTID | CLONE_CHILD_CLEARTID),
-                       "S"(stack), "d"(tidptr), "r"(r10), "r"(r8), [id] "r"(id)
+                       "S"(child_stack), "d"(tidptr), "r"(r10), "r"(r8)
                      : "rcx", "r11", "memory");
     return result;
 }
