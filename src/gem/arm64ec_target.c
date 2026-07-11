@@ -154,7 +154,7 @@ gem_arm64ec_checker_dispatch(const struct gem_arm64ec_target_map *map,
                              struct gem_thread_context *context,
                              struct gem_arm64ec_target_result *out_target) {
     struct gem_arm64ec_target_result target;
-    struct gem_arm64ec_target_result exit_thunk;
+    struct gem_arm64ec_target_result exit_thunk = {0};
     enum gem_arm64ec_target_status status;
     uint64_t original_target;
 
