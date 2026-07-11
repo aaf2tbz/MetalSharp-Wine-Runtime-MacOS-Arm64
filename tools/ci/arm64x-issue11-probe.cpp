@@ -43,8 +43,14 @@ struct Broker {
     bool entry_stage{};
 };
 
+void Trace(const char *message) {
+    std::fprintf(stderr, "ARM64X issue #11 probe stage: %s\n", message);
+    std::fflush(stderr);
+}
+
 [[noreturn]] void Fail(const char *message) {
     std::fprintf(stderr, "ARM64X issue #11 probe: %s\n", message);
+    std::fflush(stderr);
     std::exit(1);
 }
 
@@ -241,15 +247,18 @@ int wmain(int argc, wchar_t **argv) {
     if (gem_pe_arm64x_get_summary(image, &summary) != GEM_PE_OK)
         Fail("cannot read linked image summary");
 
+    Trace("parsed linked image");
     HMODULE module = LoadLibraryExW(
         argv[1], nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
     if (module == nullptr)
         Fail("Windows loader rejected linked DLL");
     const auto loaded_base = reinterpret_cast<std::uint64_t>(module);
+    Trace("loaded linked image");
     gem_memory *memory = gem_memory_create();
     if (memory == nullptr)
         Fail("cannot create GEM memory");
     MapLoadedImage(memory, loaded_base, summary.size_of_image);
+    Trace("mapped loader view into GEM");
     std::uint64_t stack = kStackBase;
     if (gem_memory_reserve(memory, &stack, kStackSize) != GEM_MEMORY_OK ||
         gem_memory_commit(memory, stack, kStackSize, GEM_PAGE_READWRITE) != GEM_MEMORY_OK)
@@ -269,6 +278,7 @@ int wmain(int argc, wchar_t **argv) {
     Broker broker{map, loaded_base, loaded_base + summary.size_of_image};
     if (!gem_arm64ec_runtime_set_boundary_broker(runtime, Boundary, &broker))
         Fail("cannot install transition broker");
+    Trace("created metadata-bound Dynarmic runtime");
 
     struct ExportStage {
         const char *stage;
@@ -286,13 +296,17 @@ int wmain(int argc, wchar_t **argv) {
             reinterpret_cast<std::uint64_t>(GetProcAddress(module, exports[i].symbol));
         if (address == 0U)
             Fail("linked fixture export is absent");
+        Trace(exports[i].stage);
         stages[i] = RunExitStage(exports[i].stage, address, exports[i].x0, runtime, broker);
+        Trace(stages[i].passed ? "exit stage passed" : "exit stage returned failure evidence");
     }
     const auto integer_export =
         reinterpret_cast<std::uint64_t>(GetProcAddress(module, "fixture_integer"));
     if (integer_export == 0U)
         Fail("integer export is absent");
+    Trace("entryInteger");
     stages[4] = RunEntryStage(integer_export, memory, map, runtime, broker);
+    Trace(stages[4].passed ? "entry stage passed" : "entry stage returned failure evidence");
 
     bool passed = true;
     for (const auto &stage : stages)
