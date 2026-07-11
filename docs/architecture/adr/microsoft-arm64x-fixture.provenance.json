@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "status": "pending-first-native-arm64-review",
+  "status": "reviewed",
   "producer": "Microsoft Visual Studio ARM64X documented build path",
   "documentation": [
     "https://learn.microsoft.com/en-us/windows/arm/arm64x-build",
@@ -9,6 +9,69 @@
   ],
   "sourceLicense": "Apache-2.0",
   "distribution": "Source only; all MSVC, SDK, and generated fixture artifacts remain build-tree-only.",
-  "pin": null,
-  "reviewRequirement": "A reviewer must copy values from the first successful native Windows ARM64 repository probe manifest into pin and set status to reviewed before any future build or inspection result is accepted as evidence."
+  "reviewEvidence": {
+    "workflowRun": "https://github.com/aaf2tbz/MetalSharp-Wine-Runtime-MacOS-Arm64/actions/runs/29143495718",
+    "runnerImageOS": "win11-arm64",
+    "runnerImageVersion": "20260706.102.1",
+    "nativeMachine": "0xAA64",
+    "visualStudioVersion": "17.14.35 (June 2026)",
+    "visualStudioInstallationVersion": "17.14.37411.7"
+  },
+  "pin": {
+    "vcToolsVersion": "14.44.35207",
+    "windowsSdkVersion": "10.0.26100.0",
+    "tools": {
+      "arm64": {
+        "cl": {
+          "version": "19.44.35228.0",
+          "sha256": "dd57fcd0ac8fdb6a11f80f01189a76b15f97257611a5001838fa2fec72fcff2b"
+        },
+        "link": {
+          "version": "14.44.35228.0",
+          "sha256": "f167f4e80fe6c38ba7099c22d83ef189e906b97b03d316b3cbfbac1eadc9fa6a"
+        },
+        "lib": {
+          "version": "14.44.35228.0",
+          "sha256": "d4b9a95afc243e8934b6cae2d4ab76cc30558ffbeb1b73cb203b0c786ec26ea8"
+        }
+      },
+      "arm64ec": {
+        "compiler": "shared-arm64-cl",
+        "compilerMode": "/arm64EC",
+        "linker": "shared-arm64-link",
+        "linkerMode": "/MACHINE:ARM64EC",
+        "cl": {
+          "version": "19.44.35228.0",
+          "sha256": "dd57fcd0ac8fdb6a11f80f01189a76b15f97257611a5001838fa2fec72fcff2b"
+        },
+        "link": {
+          "version": "14.44.35228.0",
+          "sha256": "f167f4e80fe6c38ba7099c22d83ef189e906b97b03d316b3cbfbac1eadc9fa6a"
+        },
+        "lib": {
+          "version": "14.44.35228.0",
+          "sha256": "d4b9a95afc243e8934b6cae2d4ab76cc30558ffbeb1b73cb203b0c786ec26ea8"
+        }
+      },
+      "x64": {
+        "cl": {
+          "version": "19.44.35228.0",
+          "sha256": "71b5252c224dc8729b7db863dde63ecff9d873a430799c51a6e371adb9015fa8"
+        },
+        "link": {
+          "version": "14.44.35228.0",
+          "sha256": "9ddb99a5b2f6739701585a1c3228315b3180093814fd54c9d2d7b82a55f2134e"
+        },
+        "lib": {
+          "version": "14.44.35228.0",
+          "sha256": "1fb20195a9ac6deee2aace5d0f175210ba1d2bc0e2be798145ef2f7da87f20df"
+        }
+      }
+    },
+    "dumpbin": {
+      "version": "14.44.35228.0",
+      "sha256": "4e577ce3b19244817c8927859de769764be88049f11de8ac664ccaaaa2084809"
+    }
+  },
+  "reviewRequirement": "Runs fail closed when selected VC tools, SDK version, or tool hashes differ from this reviewed native Windows ARM64 record. Update this lock only after reviewing a new successful probe."
 }
