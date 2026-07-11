@@ -105,3 +105,21 @@ jobs:
       - shell: pwsh
         run: >-
           Get-Content -Raw "${{ runner.temp }}\arm64x-probe\arm64x-toolchain-probe.manifest.json"
+      - name: Build linked ARM64X fixture
+        shell: pwsh
+        run: >-
+          pwsh -File tools/windows/build-arm64x-fixture.ps1
+          -SourceRoot "${{ github.workspace }}"
+          -BuildDir "${{ runner.temp }}\arm64x-fixture"
+          -LockFile "docs/architecture/adr/microsoft-arm64x-fixture.provenance.json"
+      - name: Execute ARM64EC validation host
+        shell: pwsh
+        run: >-
+          & "${{ runner.temp }}\arm64x-fixture\arm64ec\Release\arm64x_fixture_host.exe"
+      - name: Reject generated binary leakage
+        shell: pwsh
+        run: |
+          $tracked = git ls-files | Select-String -Pattern '\.(dll|exe|obj|lib|pdb)$'
+          if ($tracked) { throw "generated binary tracked: $tracked" }
+          $unexpected = git status --porcelain --untracked-files=all
+          if ($unexpected) { throw "fixture build modified checkout: $unexpected" }
