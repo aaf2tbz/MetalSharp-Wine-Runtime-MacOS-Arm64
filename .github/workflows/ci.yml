@@ -84,3 +84,24 @@ jobs:
       - run: arch -arm64 cmake --build build-engine --parallel
       - run: arch -arm64 ctest --test-dir build-engine --output-on-failure -L gem.engine
       - run: tools/ci/audit-zero-rosetta.sh build-engine
+
+
+  arm64x-toolchain-probe:
+    name: ARM64X toolchain probe (native Windows ARM64)
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - shell: pwsh
+        run: |
+          if ($env:PROCESSOR_ARCHITECTURE -ne 'ARM64') { throw 'non-ARM64 Windows runner' }
+          if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString() -ne 'Arm64') { throw 'non-native .NET OS architecture' }
+      - shell: pwsh
+        run: >-
+          pwsh -File tools/windows/probe-arm64x-toolchain.ps1
+          -BuildDir "${{ runner.temp }}\arm64x-probe"
+          -LockFile "docs/architecture/adr/microsoft-arm64x-fixture.provenance.json"
+      - shell: pwsh
+        run: >-
+          Get-Content -Raw "${{ runner.temp }}\arm64x-probe\arm64x-toolchain-probe.manifest.json"

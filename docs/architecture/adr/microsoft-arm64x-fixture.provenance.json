@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "status": "pending-first-native-arm64-review",
+  "producer": "Microsoft Visual Studio ARM64X documented build path",
+  "documentation": [
+    "https://learn.microsoft.com/en-us/windows/arm/arm64x-build",
+    "https://learn.microsoft.com/en-us/windows/arm/arm64ec-build",
+    "https://learn.microsoft.com/en-us/windows/arm/arm64ec"
+  ],
+  "sourceLicense": "Apache-2.0",
+  "distribution": "Source only; all MSVC, SDK, and generated fixture artifacts remain build-tree-only.",
+  "pin": null,
+  "reviewRequirement": "A reviewer must copy values from the first successful native Windows ARM64 repository probe manifest into pin and set status to reviewed before any future build or inspection result is accepted as evidence."
+}
