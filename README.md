@@ -55,10 +55,10 @@ The context also carries ARM64EC/x64 mapped GPRs, PC, SP, NZCV/RFLAGS, v0-v15/XM
 
 GEM owns Windows virtual addresses and logical guest protections:
 
-- safe high addresses may use identity mappings as an optimization;
-- exceptional low addresses, including `0x7ffe0000`, use aliases or engine callbacks;
+- safe high addresses may use validated identity mappings as an optimization while retaining checks;
+- exceptional low addresses, including `0x7ffe0000`, use logical aliases or engine callbacks;
 - guest-page protections remain independent of the 16 KiB host page size;
-- ARM64X code ranges come from CHPE metadata;
+- ARM64X code ranges come from a bounds-checked, copied-ownership CHPE v1/v2 metadata parser;
 - engines access memory through checked GEM translation APIs unless an identity fast path is proven safe.
 
 ### ARM64EC transitions
@@ -80,9 +80,12 @@ No static x18-to-x28 substitution and no guessed dispatcher ABI are accepted.
 ├── .github/
 │   ├── workflows/          Pinned-action CI with least-privilege permissions
 │   └── ISSUE_TEMPLATE/     Structured, privacy-safe reports
-├── docs/architecture/
-│   ├── deterministic-vcpu-plan.md
-│   └── gem-abi.md
+├── docs/
+│   ├── architecture/
+│   │   ├── adr/          Accepted ownership architecture records
+│   │   ├── deterministic-vcpu-plan.md
+│   │   └── gem-abi.md
+│   └── fixtures.md       Redistributable fixture policy
 ├── include/metalsharp/gem/ Public GEM interfaces
 ├── src/gem/                Runtime implementation
 ├── tests/                  Deterministic unit/conformance tests
@@ -96,7 +99,7 @@ No static x18-to-x28 substitution and no guessed dispatcher ABI are accepted.
 └── SECURITY.md             Private vulnerability reporting policy
 ```
 
-This repository intentionally excludes Wine prefixes, SDKs, toolchain archives, generated binaries, crash dumps, local diagnostics, and proprietary Windows files.
+This repository intentionally excludes Wine prefixes, SDKs, toolchain archives, generated binaries, crash dumps, local diagnostics, and proprietary Windows files. Fixture contributions must follow [`docs/fixtures.md`](docs/fixtures.md).
 
 ## Tooling
 
@@ -114,12 +117,12 @@ This repository intentionally excludes Wine prefixes, SDKs, toolchain archives, 
 
 - LLVM/Clang and LLD with ARM64EC/ARM64X support
 - LLVM MinGW for Wine’s embedded x86_64 ARM64EC slices
-- a reviewed AArch64 virtual-CPU correctness engine
+- Dynarmic 6.7.0 as the reviewed AArch64 virtual-CPU correctness engine (optional fetched build)
 - Blink for x86_64 Windows execution
 - Frida Gum Stalker or QBDI only as validated fast-engine candidates
 - native ARM64 DXMT, Winemetal, and supporting media/audio libraries after runtime gates pass
 
-Third-party engines are not accepted until instruction coverage, register fidelity, fault behavior, macOS ARM64 support, deterministic fallback, and distribution licensing have been reviewed.
+Third-party engines are not accepted until instruction coverage, register fidelity, fault behavior, macOS ARM64 support, deterministic fallback, and distribution licensing have been reviewed. The selected Milestone 3 engine decision is recorded in [`docs/architecture/adr/0004-aarch64-correctness-engine.md`](docs/architecture/adr/0004-aarch64-correctness-engine.md).
 
 ## Build and test
 
@@ -135,6 +138,19 @@ Run every local required gate:
 
 ```sh
 tools/ci/run-all.sh
+```
+
+Run the optional ARM64EC engine conformance gate (requires CMake to find Boost and fetch the pinned Dynarmic revision):
+
+```sh
+cmake -S . -B build/engine \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DMSWR_WARNINGS_AS_ERRORS=ON \
+  -DMSWR_ENABLE_ARM64EC_ENGINE=ON \
+  -DMSWR_ENGINE_CONFORMANCE=ON \
+  -DMSWR_ZERO_ROSETTA_AUDIT=ON
+cmake --build build/engine --parallel
+ctest --test-dir build/engine --output-on-failure -L gem.engine
 ```
 
 Use another build directory if desired:
@@ -187,6 +203,8 @@ Wine-derived changes are maintained as a reviewable patch series until a dedicat
 
 ## Roadmap
 
+The gated v0.1 execution roadmap is tracked in [`ROADMAP.md`](ROADMAP.md).
+
 - **A — Specification:** canonical state, ARM64X fixtures, ABI tests.
 - **B — Engine bake-off:** select an established AArch64 correctness engine.
 - **C — Standalone GEM:** execute ARM64EC and round-trip through Blink.
@@ -210,7 +228,12 @@ The detailed plan is in [`docs/architecture/deterministic-vcpu-plan.md`](docs/ar
 ## Documentation and references
 
 - [GEM ABI contract](docs/architecture/gem-abi.md)
+- [GEM logical guest memory](docs/architecture/guest-memory.md)
 - [Deterministic virtual-CPU plan](docs/architecture/deterministic-vcpu-plan.md)
+- [Redistributable fixture policy](docs/fixtures.md)
+- [ADR 0001: Engine ownership](docs/architecture/adr/0001-engine-ownership.md)
+- [ADR 0002: Memory ownership](docs/architecture/adr/0002-memory-ownership.md)
+- [ADR 0003: Transition ownership](docs/architecture/adr/0003-transition-ownership.md)
 - [Microsoft ARM64EC ABI conventions](https://learn.microsoft.com/en-us/cpp/build/arm64ec-windows-abi-conventions)
 - [Microsoft ARM64EC assembly and thunk documentation](https://learn.microsoft.com/en-us/windows/arm/arm64ec-abi)
 - [Apple JIT guidance for Apple silicon](https://developer.apple.com/documentation/apple-silicon/porting-just-in-time-compilers-to-apple-silicon)

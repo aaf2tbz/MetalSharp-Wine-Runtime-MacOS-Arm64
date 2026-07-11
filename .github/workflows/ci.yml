@@ -24,7 +24,8 @@ jobs:
         with:
           python-version: "3.13"
       - run: python3 tools/ci/check-repository.py
-      - run: python3 -m py_compile tools/ci/check-repository.py
+      - run: python3 tools/ci/test-check-repository.py
+      - run: python3 -m py_compile tools/ci/check-repository.py tools/ci/test-check-repository.py
 
   formatting:
     name: Formatting
@@ -62,3 +63,177 @@ jobs:
       - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DMSWR_WARNINGS_AS_ERRORS=ON
       - run: cmake --build build --parallel
       - run: ctest --test-dir build --output-on-failure
+
+  arm64ec-engine:
+    name: ARM64EC engine conformance (native macOS ARM64)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - run: test "$(uname -m)" = "arm64"
+      - run: test "$(sysctl -in sysctl.proc_translated 2>/dev/null || echo 0)" = "0"
+      - run: brew install boost
+      - run: >-
+          arch -arm64 cmake -S . -B build-engine
+          -DCMAKE_BUILD_TYPE=Debug
+          -DMSWR_WARNINGS_AS_ERRORS=ON
+          -DMSWR_ENABLE_ARM64EC_ENGINE=ON
+          -DMSWR_ENGINE_CONFORMANCE=ON
+          -DMSWR_ZERO_ROSETTA_AUDIT=ON
+      - run: arch -arm64 cmake --build build-engine --parallel
+      - run: arch -arm64 ctest --test-dir build-engine --output-on-failure -L gem.engine
+      - run: tools/ci/audit-zero-rosetta.sh build-engine
+
+
+  arm64x-toolchain-probe:
+    name: ARM64X toolchain probe (native Windows ARM64)
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - shell: pwsh
+        run: |
+          if ($env:PROCESSOR_ARCHITECTURE -ne 'ARM64') { throw 'non-ARM64 Windows runner' }
+          if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString() -ne 'Arm64') { throw 'non-native .NET OS architecture' }
+      - shell: pwsh
+        run: >-
+          pwsh -File tools/windows/probe-arm64x-toolchain.ps1
+          -BuildDir "${{ runner.temp }}\arm64x-probe"
+          -LockFile "docs/architecture/adr/microsoft-arm64x-fixture.provenance.json"
+      - shell: pwsh
+        run: >-
+          Get-Content -Raw "${{ runner.temp }}\arm64x-probe\arm64x-toolchain-probe.manifest.json"
+      - name: Test fail-closed fixture manifests
+        shell: pwsh
+        run: >-
+          pwsh -File tools/windows/test-arm64x-fixture-manifests.ps1
+          -TestDir "${{ runner.temp }}\arm64x-manifest-tests"
+      - name: Require two absent clean-build directories
+        shell: pwsh
+        run: |
+          foreach ($path in @("${{ runner.temp }}\arm64x-fixture-a", "${{ runner.temp }}\arm64x-fixture-b")) {
+            if (Test-Path -LiteralPath $path) { throw "clean-build directory already exists: $path" }
+          }
+      - name: Build linked ARM64X fixture A
+        shell: pwsh
+        run: >-
+          pwsh -File tools/windows/build-arm64x-fixture.ps1
+          -SourceRoot "${{ github.workspace }}"
+          -BuildDir "${{ runner.temp }}\arm64x-fixture-a"
+          -LockFile "docs/architecture/adr/microsoft-arm64x-fixture.provenance.json"
+      - name: Build linked ARM64X fixture B
+        shell: pwsh
+        run: >-
+          pwsh -File tools/windows/build-arm64x-fixture.ps1
+          -SourceRoot "${{ github.workspace }}"
+          -BuildDir "${{ runner.temp }}\arm64x-fixture-b"
+          -LockFile "docs/architecture/adr/microsoft-arm64x-fixture.provenance.json"
+      - name: Print linked ARM64X headers and load configuration
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $installation = (& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64 -property installationPath)
+          if (-not $installation) { throw 'Visual Studio ARM64 tools are absent' }
+          $vcRoot = Join-Path $installation 'VC\Tools\MSVC'
+          $vcVersion = (Get-ChildItem -LiteralPath $vcRoot -Directory | Sort-Object Name -Descending | Select-Object -First 1).Name
+          $dumpbin = Join-Path $vcRoot "$vcVersion\bin\Hostarm64\arm64\dumpbin.exe"
+          if (-not (Test-Path -LiteralPath $dumpbin -PathType Leaf)) { throw 'ARM64 dumpbin.exe is absent' }
+          $fixtureRoot = "${{ runner.temp }}\arm64x-fixture-a\arm64ec"
+          & $dumpbin /headers /loadconfig "$fixtureRoot\Release\arm64x_fixture.dll"
+          if ($LASTEXITCODE -ne 0) { throw "dumpbin exited with $LASTEXITCODE" }
+          Write-Output '=== ARM64X linker map ==='
+          Get-Content -Raw -LiteralPath "$fixtureRoot\arm64x_fixture.map"
+          Write-Output '=== ARM64EC fixture object symbols ==='
+          $fixtureObject = Get-ChildItem -LiteralPath $fixtureRoot -Recurse -Filter 'fixture.obj' |
+            Where-Object { $_.FullName -match 'arm64x_fixture\.dir' } | Select-Object -First 1
+          if ($null -eq $fixtureObject) { throw 'ARM64EC fixture object is absent' }
+          & $dumpbin /symbols $fixtureObject.FullName
+          if ($LASTEXITCODE -ne 0) { throw "dumpbin symbols exited with $LASTEXITCODE" }
+          Write-Output '=== Linked ARM64X disassembly ==='
+          & $dumpbin /disasm "$fixtureRoot\Release\arm64x_fixture.dll"
+          if ($LASTEXITCODE -ne 0) { throw "dumpbin disassembly exited with $LASTEXITCODE" }
+      - name: Inspect linked ARM64X fixture A with repository parser
+        shell: pwsh
+        run: >-
+          pwsh -File tools/windows/inspect-arm64x-fixture.ps1
+          -ManifestPath "${{ runner.temp }}\arm64x-fixture-a\arm64x-fixture-build.manifest.json"
+          -Inspector "${{ runner.temp }}\arm64x-fixture-a\arm64\Release\arm64x_fixture_inspector.exe"
+          -EvidencePath "${{ runner.temp }}\arm64x-fixture-a\arm64x-fixture-inspection.json"
+      - name: Inspect linked ARM64X fixture B with repository parser
+        shell: pwsh
+        run: >-
+          pwsh -File tools/windows/inspect-arm64x-fixture.ps1
+          -ManifestPath "${{ runner.temp }}\arm64x-fixture-b\arm64x-fixture-build.manifest.json"
+          -Inspector "${{ runner.temp }}\arm64x-fixture-b\arm64\Release\arm64x_fixture_inspector.exe"
+          -EvidencePath "${{ runner.temp }}\arm64x-fixture-b\arm64x-fixture-inspection.json"
+      - name: Compare and print normalized clean-build evidence
+        shell: pwsh
+        run: |
+          pwsh -File tools/windows/compare-arm64x-fixture-builds.ps1 `
+            -ManifestA "${{ runner.temp }}\arm64x-fixture-a\arm64x-fixture-build.manifest.json" `
+            -EvidenceA "${{ runner.temp }}\arm64x-fixture-a\arm64x-fixture-inspection.json" `
+            -ManifestB "${{ runner.temp }}\arm64x-fixture-b\arm64x-fixture-build.manifest.json" `
+            -EvidenceB "${{ runner.temp }}\arm64x-fixture-b\arm64x-fixture-inspection.json" `
+            -OutputPath "${{ runner.temp }}\arm64x-reproducibility.json"
+          Get-Content -Raw -LiteralPath "${{ runner.temp }}\arm64x-reproducibility.json"
+      - name: Execute both ARM64EC validation hosts
+        shell: pwsh
+        run: |
+          foreach ($name in @('a', 'b')) {
+            $root = "${{ runner.temp }}\arm64x-fixture-$name"
+            & "$root\arm64ec\Release\arm64x_fixture_host.exe" "$root\arm64ec-entry-map.txt"
+            if ($LASTEXITCODE -ne 0) { throw "validation host $name exited with $LASTEXITCODE" }
+          }
+      - name: Build native pinned-Dynarmic issue 11 probe
+        shell: pwsh
+        run: |
+          $build = "${{ runner.temp }}\arm64x-issue11-probe"
+          if (Test-Path -LiteralPath $build) { throw 'issue 11 probe build directory must be initially absent' }
+          $vcpkg = 'C:\vcpkg\vcpkg.exe'
+          $boostInclude = 'C:\vcpkg\installed\arm64-windows\include'
+          if (-not (Test-Path -LiteralPath (Join-Path $boostInclude 'boost\version.hpp'))) {
+            if (-not (Test-Path -LiteralPath $vcpkg -PathType Leaf)) { throw 'hosted vcpkg is absent' }
+            & $vcpkg install boost-icl:arm64-windows boost-variant:arm64-windows
+            if ($LASTEXITCODE -ne 0) { throw "Boost header installation exited with $LASTEXITCODE" }
+          }
+          if (-not (Test-Path -LiteralPath (Join-Path $boostInclude 'boost\version.hpp'))) { throw 'Boost headers remain absent' }
+          cmake -S . -B $build -G 'Visual Studio 17 2022' -A ARM64 `
+            "-DBoost_INCLUDE_DIR=$boostInclude" `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DMSWR_WARNINGS_AS_ERRORS=ON `
+            -DMSWR_ENABLE_ARM64EC_ENGINE=ON `
+            -DMSWR_ENGINE_CONFORMANCE=OFF `
+            -DMSWR_BUILD_ARM64X_ISSUE11_PROBE=ON `
+            -DBUILD_TESTING=OFF
+          if ($LASTEXITCODE -ne 0) { throw "issue 11 probe configure exited with $LASTEXITCODE" }
+          cmake --build $build --config Release --target arm64x_issue11_probe -- /m:1
+          if ($LASTEXITCODE -ne 0) { throw "issue 11 probe build exited with $LASTEXITCODE" }
+      - name: Execute authentic linked paths through pinned Dynarmic
+        shell: pwsh
+        run: |
+          $probe = "${{ runner.temp }}\arm64x-issue11-probe\Release\arm64x_issue11_probe.exe"
+          foreach ($name in @('a', 'b')) {
+            $root = "${{ runner.temp }}\arm64x-fixture-$name"
+            $manifestPath = "$root\arm64x-fixture-build.manifest.json"
+            $inspectionPath = "$root\arm64x-fixture-inspection.json"
+            $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+            $inspectionHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $inspectionPath).Hash.ToLowerInvariant()
+            & $probe "$root\arm64ec\Release\arm64x_fixture.dll" $manifest.outputs.dll.sha256 `
+              $inspectionHash "$root\arm64ec-entry-map.txt" "$root\arm64x-issue11-execution.json"
+            if ($LASTEXITCODE -ne 0) { throw "issue 11 execution probe $name exited with $LASTEXITCODE" }
+          }
+          pwsh -File tools/windows/validate-arm64x-issue11-evidence.ps1 `
+            -InspectionA "${{ runner.temp }}\arm64x-fixture-a\arm64x-fixture-inspection.json" `
+            -ExecutionA "${{ runner.temp }}\arm64x-fixture-a\arm64x-issue11-execution.json" `
+            -InspectionB "${{ runner.temp }}\arm64x-fixture-b\arm64x-fixture-inspection.json" `
+            -ExecutionB "${{ runner.temp }}\arm64x-fixture-b\arm64x-issue11-execution.json"
+          Get-Content -Raw -LiteralPath "${{ runner.temp }}\arm64x-fixture-a\arm64x-issue11-execution.json"
+      - name: Reject generated binary leakage
+        shell: pwsh
+        run: |
+          $tracked = git ls-files | Select-String -Pattern '\.(dll|exe|obj|lib|pdb)$'
+          if ($tracked) { throw "generated binary tracked: $tracked" }
+          $unexpected = git status --porcelain --untracked-files=all
+          if ($unexpected) { throw "fixture build modified checkout: $unexpected" }

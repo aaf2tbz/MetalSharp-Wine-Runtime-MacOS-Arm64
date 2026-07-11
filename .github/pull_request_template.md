@@ -9,6 +9,7 @@
 - [ ] `tools/ci/run-all.sh` passes
 - [ ] New behavior has deterministic tests
 - [ ] No binaries, prefixes, build products, private paths, or proprietary files are included
+- [ ] Fixture data follows `docs/fixtures.md`; no proprietary or generated binaries are committed
 - [ ] Licensing is identified for third-party or Wine-derived work
 
 ## Runtime invariants

@@ -1,0 +1,8 @@
+{
+  "component": "llvm",
+  "revision": "22.1.8",
+  "source": "Homebrew LLVM/lld installation",
+  "license": "Apache-2.0 WITH LLVM-exception",
+  "status": "non-binding raw-COFF research only; not evidence of a linked ARM64X image",
+  "distribution": "configured compiler only; generated assembly, COFF, and manifest remain in the build tree"
+}

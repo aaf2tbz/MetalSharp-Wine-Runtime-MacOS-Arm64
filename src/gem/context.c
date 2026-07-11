@@ -5,13 +5,17 @@
 
 void gem_context_initialize(struct gem_thread_context *context, uint64_t teb, enum gem_isa isa) {
     memset(context, 0, sizeof(*context));
+    context->layout_version = GEM_CONTEXT_LAYOUT_VERSION;
+    context->context_size = GEM_THREAD_CONTEXT_EXPECTED_SIZE;
     context->teb = teb;
     context->x[18] = teb;
     context->isa = (uint32_t)isa;
 }
 
 bool gem_context_is_valid(const struct gem_thread_context *context) {
-    if (context == NULL || context->teb == 0 || context->x[18] != context->teb)
+    if (context == NULL || context->layout_version != GEM_CONTEXT_LAYOUT_VERSION ||
+        context->context_size != GEM_THREAD_CONTEXT_EXPECTED_SIZE || context->teb == 0 ||
+        context->x[18] != context->teb)
         return false;
     return context->isa == GEM_ISA_ARM64EC || context->isa == GEM_ISA_X64;
 }
