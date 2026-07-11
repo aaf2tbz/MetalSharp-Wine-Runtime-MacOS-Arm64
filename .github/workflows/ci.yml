@@ -190,7 +190,11 @@ jobs:
         run: |
           $build = "${{ runner.temp }}\arm64x-issue11-probe"
           if (Test-Path -LiteralPath $build) { throw 'issue 11 probe build directory must be initially absent' }
+          $boostInclude = @('C:\vcpkg\installed\arm64-windows\include', 'C:\vcpkg\installed\x64-windows\include') |
+            Where-Object { Test-Path -LiteralPath (Join-Path $_ 'boost\version.hpp') } | Select-Object -First 1
+          if (-not $boostInclude) { throw 'reviewed runner has no Boost headers for pinned Dynarmic' }
           cmake -S . -B $build -G 'Visual Studio 17 2022' -A ARM64 `
+            "-DBoost_INCLUDE_DIR=$boostInclude" `
             -DCMAKE_BUILD_TYPE=Release `
             -DMSWR_WARNINGS_AS_ERRORS=ON `
             -DMSWR_ENABLE_ARM64EC_ENGINE=ON `
