@@ -40,6 +40,20 @@ enum gem_memory_protection {
     GEM_PAGE_GUARD = 0x100
 };
 
+/*
+ * `gem_memory` is an opaque, sparse, 4 KiB-page Windows address space.  Every
+ * public operation that observes or mutates page-table state is linearizable:
+ * it holds a single per-object exclusive lock across complete validation,
+ * allocation/state publication, and caller-buffer copying.  Concurrent callers
+ * of the same `gem_memory` are therefore serialized, and compound operations
+ * (identity mapping and its rollback) never partially publish state.
+ *
+ * Object destruction requires external lifetime coordination: no operation may
+ * start or remain active on a `gem_memory` once `gem_memory_destroy` begins.
+ * External identity storage passed to `gem_memory_map_identity` remains owned
+ * by the caller and must stay live and unchanged except through GEM until the
+ * mapping is unmapped/released or the `gem_memory` is destroyed.
+ */
 struct gem_memory;
 struct gem_memory *gem_memory_create(void);
 void gem_memory_destroy(struct gem_memory *memory);
