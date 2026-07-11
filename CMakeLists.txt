@@ -10,6 +10,30 @@ option(MSWR_ENGINE_DYNARMIC "Use Dynarmic as the ARM64EC correctness engine back
 option(MSWR_ENGINE_CONFORMANCE "Build ARM64EC engine conformance tests" OFF)
 option(MSWR_ZERO_ROSETTA_AUDIT "Build/run native ARM64 macOS zero-Rosetta audit tests" OFF)
 option(MSWR_FETCH_DYNARMIC "Fetch the pinned Dynarmic dependency when engine support is enabled" ON)
+# Raw ARM64EC COFF is structural research only: it is not a linked ARM64X fixture.
+option(MSWR_GENERATE_ARM64EC_THUNK_FIXTURES "Generate non-binding LLVM ARM64EC COFF research evidence" OFF)
+
+if(MSWR_GENERATE_ARM64EC_THUNK_FIXTURES AND CMAKE_C_COMPILER_ID MATCHES "Clang")
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    set(MSWR_ARM64EC_THUNK_ASM "${CMAKE_CURRENT_BINARY_DIR}/fixtures/arm64ec_thunks.s")
+    set(MSWR_ARM64EC_THUNK_OBJECT "${CMAKE_CURRENT_BINARY_DIR}/fixtures/arm64ec_thunks.obj")
+    set(MSWR_ARM64EC_THUNK_PROVENANCE
+        "${CMAKE_CURRENT_BINARY_DIR}/fixtures/arm64ec_thunks.provenance.json")
+    add_custom_command(OUTPUT "${MSWR_ARM64EC_THUNK_ASM}" "${MSWR_ARM64EC_THUNK_OBJECT}"
+                              "${MSWR_ARM64EC_THUNK_PROVENANCE}"
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_arm64ec_thunk_fixture.py"
+            --clang "${CMAKE_C_COMPILER}" --source "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/arm64ec_thunks.c"
+            --output "${MSWR_ARM64EC_THUNK_ASM}" --object "${MSWR_ARM64EC_THUNK_OBJECT}"
+            --llvm-provenance "${CMAKE_CURRENT_SOURCE_DIR}/docs/architecture/adr/llvm-arm64ec-fixture.provenance.json"
+        DEPENDS tests/fixtures/arm64ec_thunks.c tools/generate_arm64ec_thunk_fixture.py
+                docs/architecture/adr/llvm-arm64ec-fixture.provenance.json
+        VERBATIM)
+    add_custom_target(arm64ec_llvm_thunk_fixtures ALL DEPENDS "${MSWR_ARM64EC_THUNK_ASM}"
+                                                               "${MSWR_ARM64EC_THUNK_OBJECT}"
+                                                               "${MSWR_ARM64EC_THUNK_PROVENANCE}")
+elseif(MSWR_GENERATE_ARM64EC_THUNK_FIXTURES)
+    message(STATUS "ARM64EC LLVM thunk generation requires Clang; source fixture remains available")
+endif()
 
 function(mswr_enable_warnings target)
     if(CMAKE_C_COMPILER_ID MATCHES "AppleClang|Clang|GNU")
@@ -29,6 +53,7 @@ endfunction()
 
 add_library(metalsharp_gem STATIC
     src/gem/arm64ec_engine.c
+    src/gem/arm64ec_target.c
     src/gem/context.c
     src/gem/context_conversion.c
     src/gem/context_serialization.c
@@ -146,6 +171,14 @@ if(BUILD_TESTING)
     add_library(pe_arm64x_fixture STATIC tests/pe_arm64x_fixture_builder.c)
     target_include_directories(pe_arm64x_fixture PUBLIC tests)
     mswr_enable_warnings(pe_arm64x_fixture)
+    if(TARGET arm64ec_engine_conformance)
+        target_link_libraries(arm64ec_engine_conformance PRIVATE pe_arm64x_fixture)
+    endif()
+    add_executable(arm64ec_target_test tests/arm64ec_target_test.c)
+    target_link_libraries(arm64ec_target_test PRIVATE metalsharp_gem pe_arm64x_fixture)
+    mswr_enable_warnings(arm64ec_target_test)
+    add_test(NAME gem.arm64ec_target COMMAND arm64ec_target_test)
+
     foreach(test_name pe_arm64x_test pe_arm64x_malformed_test pe_arm64x_fuzz_test)
         add_executable(${test_name} tests/${test_name}.c)
         target_link_libraries(${test_name} PRIVATE metalsharp_gem pe_arm64x_fixture)

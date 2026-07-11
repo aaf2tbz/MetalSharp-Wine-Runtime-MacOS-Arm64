@@ -24,6 +24,9 @@ ARM64X_FIXTURE_API double fixture_floating(double value);
 ARM64X_FIXTURE_API arm64x_fixture_pair fixture_aggregate(arm64x_fixture_pair value);
 ARM64X_FIXTURE_API int64_t fixture_variadic(uint32_t count, ...);
 ARM64X_FIXTURE_API int32_t fixture_indirect_x64(int32_t value);
+ARM64X_FIXTURE_API double fixture_indirect_x64_floating(double value);
+ARM64X_FIXTURE_API arm64x_fixture_pair fixture_indirect_x64_aggregate(arm64x_fixture_pair value);
+ARM64X_FIXTURE_API int64_t fixture_indirect_x64_variadic(uint32_t count, ...);
 ARM64X_FIXTURE_API uint32_t fixture_import_probe(void);
 
 #ifdef __cplusplus

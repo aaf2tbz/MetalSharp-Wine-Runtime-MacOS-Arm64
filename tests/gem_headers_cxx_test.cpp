@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "metalsharp/gem/arm64ec_engine.h"
+#include "metalsharp/gem/arm64ec_target.h"
 #include "metalsharp/gem/context.h"
 #include "metalsharp/gem/context_conversion.h"
 #include "metalsharp/gem/context_serialization.h"

@@ -67,6 +67,22 @@ class Environment final : public Dynarmic::A64::UserCallbacks {
 
     std::optional<std::uint32_t> MemoryReadCode(Dynarmic::A64::VAddr vaddr) override {
         std::array<std::uint8_t, sizeof(std::uint32_t)> bytes{};
+        if (runtime->target_map != nullptr) {
+            gem_arm64ec_target_result target{};
+            const gem_arm64ec_target_status status =
+                gem_arm64ec_target_resolve(runtime->target_map, vaddr, &target);
+            if (status != GEM_ARM64EC_TARGET_OK || target.resolved_va != vaddr ||
+                target.kind == GEM_ARM64EC_TARGET_X64_BOUNDARY) {
+                const gem_stop_reason reason =
+                    status == GEM_ARM64EC_TARGET_OK &&
+                            target.kind == GEM_ARM64EC_TARGET_X64_BOUNDARY
+                        ? GEM_STOP_ARCH_TRANSITION
+                        : GEM_STOP_INVARIANT_VIOLATION;
+                SetStop(reason, status == GEM_ARM64EC_TARGET_OK ? target.resolved_va : vaddr,
+                        static_cast<std::uint32_t>(status));
+                return std::nullopt;
+            }
+        }
         const gem_memory_error error =
             gem_memory_fetch(runtime->memory, vaddr, bytes.data(), bytes.size());
         if (error != GEM_MEMORY_OK) {
@@ -534,7 +550,73 @@ extern "C" enum gem_stop_reason gem_arm64ec_dynarmic_run(struct gem_arm64ec_runt
     ClearTransientHalts(jit);
 
     while (retired < budget) {
-        const std::uint64_t pc_before = jit.GetPC();
+        std::uint64_t pc_before = jit.GetPC();
+        gem_arm64ec_target_kind target_kind = GEM_ARM64EC_TARGET_ARM64EC;
+        if (runtime->boundary_broker != nullptr) {
+            gem_thread_context broker_context = *context;
+            gem_arm64ec_boundary_kind boundary_kind = GEM_ARM64EC_BOUNDARY_CHECK_ICALL;
+            ExportContext(jit, broker_context);
+            const gem_arm64ec_boundary_action action = runtime->boundary_broker(
+                runtime->boundary_opaque, pc_before, &broker_context, &boundary_kind);
+            if (action != GEM_ARM64EC_BOUNDARY_NOT_HANDLED) {
+                if (boundary_kind < GEM_ARM64EC_BOUNDARY_CHECK_ICALL ||
+                    boundary_kind > GEM_ARM64EC_BOUNDARY_DISPATCH_RETURN ||
+                    action == GEM_ARM64EC_BOUNDARY_FAIL || !gem_context_is_valid(&broker_context) ||
+                    broker_context.x[18] != context->teb ||
+                    (action == GEM_ARM64EC_BOUNDARY_STOP && broker_context.pc != pc_before) ||
+                    (action == GEM_ARM64EC_BOUNDARY_RESUME && broker_context.pc == pc_before) ||
+                    (runtime->config.max_transitions != 0U &&
+                     runtime->transition_count >= runtime->config.max_transitions)) {
+                    ExportContext(jit, *context);
+                    SetStopInfo(*runtime, GEM_STOP_INVARIANT_VIOLATION, retired, pc_before,
+                                GEM_ARM64EC_ACCESS_NONE, GEM_MEMORY_OK,
+                                static_cast<std::uint32_t>(action));
+                    return GEM_STOP_INVARIANT_VIOLATION;
+                }
+                ++runtime->transition_count;
+                if (action == GEM_ARM64EC_BOUNDARY_STOP) {
+                    *context = broker_context;
+                    SetStopInfo(*runtime, GEM_STOP_ARCH_TRANSITION, retired, pc_before,
+                                GEM_ARM64EC_ACCESS_NONE, GEM_MEMORY_OK,
+                                static_cast<std::uint32_t>(boundary_kind));
+                    return GEM_STOP_ARCH_TRANSITION;
+                }
+                if (action != GEM_ARM64EC_BOUNDARY_RESUME) {
+                    ExportContext(jit, *context);
+                    SetStopInfo(*runtime, GEM_STOP_INVARIANT_VIOLATION, retired, pc_before,
+                                GEM_ARM64EC_ACCESS_NONE, GEM_MEMORY_OK,
+                                static_cast<std::uint32_t>(action));
+                    return GEM_STOP_INVARIANT_VIOLATION;
+                }
+                ImportContext(jit, broker_context);
+                *context = broker_context;
+                pc_before = broker_context.pc;
+            }
+        }
+        if (runtime->target_map != nullptr) {
+            gem_arm64ec_target_result target{};
+            const gem_arm64ec_target_status target_status =
+                gem_arm64ec_target_resolve(runtime->target_map, pc_before, &target);
+            if (target_status != GEM_ARM64EC_TARGET_OK) {
+                ExportContext(jit, *context);
+                SetStopInfo(*runtime, GEM_STOP_INVARIANT_VIOLATION, retired, pc_before,
+                            GEM_ARM64EC_ACCESS_NONE, GEM_MEMORY_OK,
+                            static_cast<std::uint32_t>(target_status));
+                return GEM_STOP_INVARIANT_VIOLATION;
+            }
+            if (target.kind == GEM_ARM64EC_TARGET_X64_BOUNDARY) {
+                jit.SetPC(target.resolved_va);
+                ExportContext(jit, *context);
+                SetStopInfo(*runtime, GEM_STOP_ARCH_TRANSITION, retired, target.resolved_va,
+                            GEM_ARM64EC_ACCESS_NONE, GEM_MEMORY_OK, 0);
+                return GEM_STOP_ARCH_TRANSITION;
+            }
+            target_kind = target.kind;
+            if (target.resolved_va != pc_before) {
+                jit.SetPC(target.resolved_va);
+                pc_before = target.resolved_va;
+            }
+        }
         if (pc_before == runtime->config.host_return_sentinel) {
             ExportContext(jit, *context);
             SetStopInfo(*runtime, GEM_STOP_HOST_RETURN, retired, 0, GEM_ARM64EC_ACCESS_NONE,
@@ -569,7 +651,7 @@ extern "C" enum gem_stop_reason gem_arm64ec_dynarmic_run(struct gem_arm64ec_runt
                         GEM_MEMORY_OK, instruction);
             return reason;
         }
-        if (HasForbiddenArm64ecRegister(instruction)) {
+        if (target_kind == GEM_ARM64EC_TARGET_ARM64EC && HasForbiddenArm64ecRegister(instruction)) {
             ExportContext(jit, *context);
             SetStopInfo(*runtime, GEM_STOP_UNSUPPORTED_INSTRUCTION, retired, pc_before,
                         GEM_ARM64EC_ACCESS_NONE, GEM_MEMORY_OK, instruction);
@@ -582,6 +664,26 @@ extern "C" enum gem_stop_reason gem_arm64ec_dynarmic_run(struct gem_arm64ec_runt
 
         if (backend.env.cache_dirty || HasHalt(halt, Dynarmic::HaltReason::CacheInvalidation))
             jit.ClearCache();
+
+        if (backend.env.pending_reason == GEM_STOP_ARCH_TRANSITION) {
+            if (jit.GetPC() == backend.env.pending_fault_address &&
+                jit.GetRegister(18) == context->teb) {
+                ++retired;
+                ExportContext(jit, *context);
+                SetStopInfo(*runtime, GEM_STOP_ARCH_TRANSITION, retired,
+                            backend.env.pending_fault_address, GEM_ARM64EC_ACCESS_NONE,
+                            GEM_MEMORY_OK, 0);
+                ClearTransientHalts(jit);
+                return GEM_STOP_ARCH_TRANSITION;
+            }
+            RestoreSnapshot(jit, before);
+            ExportContext(jit, *context);
+            SetStopInfo(*runtime, GEM_STOP_INVARIANT_VIOLATION, retired,
+                        backend.env.pending_fault_address, GEM_ARM64EC_ACCESS_NONE, GEM_MEMORY_OK,
+                        backend.env.pending_engine_status);
+            ClearTransientHalts(jit);
+            return GEM_STOP_INVARIANT_VIOLATION;
+        }
 
         if (backend.env.pending_reason != GEM_STOP_NONE) {
             RestoreSnapshot(jit, before);
@@ -615,14 +717,15 @@ extern "C" enum gem_stop_reason gem_arm64ec_dynarmic_run(struct gem_arm64ec_runt
         }
 
         const std::uint64_t pc_after = jit.GetPC();
-        if (pc_after == runtime->config.host_return_sentinel) {
+        if (runtime->target_map == nullptr && pc_after == runtime->config.host_return_sentinel) {
             ExportContext(jit, *context);
             SetStopInfo(*runtime, GEM_STOP_HOST_RETURN, retired, 0, GEM_ARM64EC_ACCESS_NONE,
                         GEM_MEMORY_OK, 0);
             ClearTransientHalts(jit);
             return GEM_STOP_HOST_RETURN;
         }
-        if (pc_after == runtime->config.arch_transition_sentinel) {
+        if (runtime->target_map == nullptr &&
+            pc_after == runtime->config.arch_transition_sentinel) {
             ExportContext(jit, *context);
             SetStopInfo(*runtime, GEM_STOP_ARCH_TRANSITION, retired, 0, GEM_ARM64EC_ACCESS_NONE,
                         GEM_MEMORY_OK, 0);

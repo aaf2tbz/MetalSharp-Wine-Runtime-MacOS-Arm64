@@ -4,6 +4,10 @@
 
 The first roadmap ends with a standalone, repeatable ARM64EC → x86_64/Blink → ARM64EC round trip whose canonical state never depends on Darwin x18. It deliberately stops before modifying Wine startup. This gives the Wine integration a proven execution substrate instead of another speculative runtime path.
 
+The evidence-corrected assessment in
+[`docs/architecture/arm64ec-arm64x-research-assessment.md`](docs/architecture/arm64ec-arm64x-research-assessment.md)
+is a cross-cutting planning input. It preserves useful PE/CHPE, memory-order, and 4 KiB guest-page research goals while explicitly rejecting guessed metadata, unverified TSO controls, ad-hoc x86 decoding, and unsafe signal-handler page emulation.
+
 ### Release acceptance criteria
 
 v0.1 is complete only when all of the following are demonstrated in CI-compatible tests:
@@ -17,6 +21,8 @@ v0.1 is complete only when all of the following are demonstrated in CI-compatibl
 - GPRs, SP, PC, NZCV/RFLAGS, v0-v15/XMM0-XMM15, FP state, and stack bytes match expected results after the round trip.
 - Direct call, indirect call, callback, normal return, tail-call, memory fault, and unsupported-instruction stop reasons are deterministic.
 - Every optimized execution path used in the demonstration has a correctness fallback.
+- The x64 engine passes an explicit x86 memory-order conformance suite; hardware TSO is optional and never assumed.
+- Four 4 KiB guest pages sharing one 16 KiB host page retain distinct logical permissions and deterministic checked faults without transiently exposing neighboring guest pages.
 - The macOS process and every Mach-O dependency are ARM64, with no Rosetta invocation.
 - CI, formatting, repository-policy, licensing, and test gates pass.
 
@@ -85,16 +91,50 @@ Preferred evaluation order:
 
 ## Milestone 4 — ARM64EC checker and thunk execution
 
-- [ ] Generate small ARM64EC fixtures with LLVM rather than hand-writing production thunk bytes.
-- [ ] Implement target classification against the Milestone 1 code map.
+**Status: authentic linked fixture accepted; engine execution pending.** Issue #10 and native
+Windows ARM64 CI run `29146642211` satisfied the external Microsoft-linked ARM64X prerequisite.
+The same-job source-only pipeline produced, inspected, compared, and natively executed two clean
+build-tree images without retaining Microsoft artifacts. This does not itself prove issue #11:
+relocated checker/entry/exit paths still require stage-specific probe evidence and execution
+through pinned Dynarmic. Raw COFF and synthetic metadata remain non-accepting substitutes.
+
+- [x] Generate authentic Microsoft-linked ARM64X fixtures from source in runner-temporary build trees.
+- [x] Implement target classification against the Milestone 1 code map.
 - [ ] Implement `__os_arm64x_check_icall` behavior for ARM64EC and x64 targets.
 - [ ] Add CFG-form checker interfaces while keeping policy separate from architecture dispatch.
 - [ ] Preserve x0-x8, x15, and q0-q7 exactly as required.
 - [ ] Resolve the four-byte ARM64EC entry-thunk descriptor safely.
 - [ ] Execute signature-specific integer, floating-point, structure, and variadic thunk fixtures.
-- [ ] Validate disallowed ARM64EC register use as a deterministic failure.
+- [x] Validate disallowed ARM64EC register use as a deterministic failure.
+- [x] Inspect linked load-config and CHPE records with checked file-offset/RVA/VA conversion; do not infer linked semantics from raw COFF sections.
+- [ ] Prove relocation, import, alias, and local-exit-thunk resolution to a real metadata-classified x64 target.
 
-**Exit gate:** generated entry and exit thunks execute correctly without Blink and produce expected canonical states.
+**Exit gate:** open after the linked-producer prerequisite passed, but not yet complete. A new
+native Windows ARM64 run must execute the authentic generated checker, entry thunk, and exit thunk
+through pinned Dynarmic at a forced nonpreferred GEM base, cover integer/floating/aggregate/
+variadic paths, and stop before fetching the metadata-classified x64 boundary. Descriptor,
+relocation, import, and alias behavior must be consumed only from checked native probe evidence;
+no raw-COFF or synthetic-metadata result satisfies this gate.
+
+## Cross-cutting correctness track — x86 memory ordering and host-page isolation
+
+This track may proceed while Milestone 4's engine-execution work remains unresolved, but it
+cannot bypass that milestone's exit gate.
+
+- [ ] Specify the observable x86-TSO contract from authoritative architecture documentation, including permitted Store→Load behavior.
+- [ ] Inventory Blink interpreter/JIT loads, stores, locked operations, fences, self-modifying-code handling, fault ordering, and host-compiler assumptions.
+- [ ] Add bounded Store Buffering, Load Buffering, Message Passing, IRIW, locked-operation, and self-modifying-code litmus tests under contention.
+- [ ] Prove interpreter/JIT equivalence and retain a deterministic interpreter or serialized fallback for unproven cases.
+- [ ] Prove atomic and transactional behavior for misaligned and cross-4-KiB-page guest accesses.
+- [ ] Keep hardware TSO as an optional optimization only if a supported, queryable, per-thread API is documented and independently probed.
+- [ ] Do not depend on private TSO symbols, kernel extensions, Rosetta process state, or an unverified Virtualization.framework control.
+- [ ] Preserve distinct logical permissions for 4 KiB guest pages sharing a 16 KiB host page through checked GEM translation.
+- [ ] Reject temporary host-page permission widening, guessed `ucontext_t` debug-state mutation, and process-global signal single-stepping as correctness mechanisms.
+- [ ] Evaluate Mach exceptions or direct mappings only as optional accelerations after race, reentrancy, fault, and multithreaded conformance tests pass.
+
+**Exit gate:** memory-order litmus tests and 4 KiB protection/fault tests pass repeatedly on native
+ARM64 macOS with hardware TSO disabled or unavailable, and every acceleration has a deterministic
+GEM-owned fallback.
 
 ## Milestone 5 — Blink integration and hybrid round trip
 
@@ -108,8 +148,10 @@ Preferred evaluation order:
 - [ ] Add callbacks, tail calls, nested transitions, memory faults, and unsupported-instruction cases.
 - [ ] Compare every final register, flag, SIMD lane, stack byte, and guest memory mutation.
 - [ ] Keep Blink JIT generation process-serialized until concurrency is proven safe.
+- [ ] Route all x64 memory effects through the proven memory-order and guest-page contracts; a byte-prefix scanner is not an acceptable decoder.
+- [ ] Perform native instruction-cache maintenance only when host executable code is created or modified; do not add architecture-transition `ISB` instructions without a demonstrated requirement.
 
-**Exit gate:** the v0.1 hybrid round-trip acceptance suite passes repeatedly and under sanitizers where supported.
+**Exit gate:** the v0.1 hybrid round-trip acceptance suite and the cross-cutting memory-order/page-isolation gates pass repeatedly and under sanitizers where supported.
 
 ## Milestone 6 — Release hardening
 
@@ -141,6 +183,8 @@ The second roadmap integrates GEM into Wine ntdll without changing the v0.1 stat
 
 - One milestone exit gate at a time; no integration work may bypass a failed lower-level gate.
 - Every ABI behavior requires published documentation or a legal, reproducible fixture.
+- Research notes and sample code are hypotheses until reproduced against pinned public specifications, tool output, and native tests.
+- PE machine identifiers, CHPE layouts, load-config offsets, and thunk-table meanings must come from pinned definitions or verified legal fixtures; no guessed structures are accepted.
 - No proprietary Windows binaries or private diagnostics enter the repository.
 - No direct native PE execution is required for correctness.
 - No optimized path ships without a deterministic fallback.

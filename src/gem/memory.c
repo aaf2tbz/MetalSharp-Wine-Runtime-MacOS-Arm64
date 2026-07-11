@@ -2,7 +2,11 @@
 #include "metalsharp/gem/memory.h"
 #include <stdlib.h>
 #include <string.h>
+#if defined(_WIN32)
+#include <windows.h>
+#else
 #include <unistd.h>
+#endif
 #define GEM_MEMORY_MAX_PAGES UINT64_C(1048576)
 struct backing {
     uint8_t *data;
@@ -265,12 +269,22 @@ enum gem_memory_error gem_memory_alias(struct gem_memory *m, uint64_t a, uint64_
     }
     return GEM_MEMORY_OK;
 }
+static uint64_t host_page_size(void) {
+#if defined(_WIN32)
+    SYSTEM_INFO info;
+    GetSystemInfo(&info);
+    return (uint64_t)info.dwPageSize;
+#else
+    const long size = sysconf(_SC_PAGESIZE);
+    return size > 0 ? (uint64_t)size : 0U;
+#endif
+}
 enum gem_memory_error gem_memory_map_identity(struct gem_memory *m, uint64_t a, void *h, uint64_t n,
                                               uint32_t prot) {
-    uint64_t o, hs = (uint64_t)sysconf(_SC_PAGESIZE);
+    uint64_t o, hs = host_page_size();
     enum gem_memory_error e;
-    if (!h || a < UINT64_C(0x100000000) || a != (uint64_t)(uintptr_t)h || !range_ok(a, n) ||
-        !prot_ok(prot) || a % hs || n % hs)
+    if (!h || hs == 0U || a < UINT64_C(0x100000000) || a != (uint64_t)(uintptr_t)h ||
+        !range_ok(a, n) || !prot_ok(prot) || a % hs || n % hs)
         return GEM_MEMORY_INVALID_ARGUMENT;
     if ((e = gem_memory_reserve(m, &a, n)))
         return e;

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "metalsharp/gem/arm64ec_engine.h"
+#include "metalsharp/gem/pe_arm64x.h"
+#include "pe_arm64x_fixture_builder.h"
 
 #include <array>
 #include <cstdint>
@@ -140,6 +142,7 @@ struct Fixture {
         config.host_return_sentinel = kHostReturn;
         config.arch_transition_sentinel = kTransition;
         config.max_budget = 100000;
+        config.max_transitions = 64;
         runtime = gem_arm64ec_runtime_create(memory, &config);
         EXPECT(runtime != nullptr);
         EXPECT(gem_arm64ec_set_current_runtime(runtime));
@@ -183,14 +186,41 @@ void TestProvenance() {
                        "a41c380246d3d9f9874f0f792d234dc0cc17c180") != nullptr);
 }
 
+void ExpectInvalidContextUnchanged(Fixture &fixture, gem_thread_context &context, u64 budget = 1) {
+    const gem_thread_context before = context;
+    EXPECT(gem_arm64ec_runtime_run(fixture.runtime, &context, budget) ==
+           GEM_STOP_INVARIANT_VIOLATION);
+    EXPECT(std::memcmp(&context, &before, sizeof(context)) == 0);
+    gem_arm64ec_stop_info info{};
+    EXPECT(gem_arm64ec_runtime_last_stop_info(fixture.runtime, &info));
+    EXPECT(info.reason == GEM_STOP_INVARIANT_VIOLATION);
+    EXPECT(info.instructions_retired == 0U);
+}
+
 void TestInvalidContextAndBudgetZero() {
     Fixture fixture;
     gem_thread_context context{};
-    EXPECT(gem_run_arm64ec(&context, 1) == GEM_STOP_INVARIANT_VIOLATION);
-    EXPECT(context.stop_reason == GEM_STOP_INVARIANT_VIOLATION);
+    ExpectInvalidContextUnchanged(fixture, context);
 
     gem_context_initialize(&context, kTebA, GEM_ISA_X64);
-    EXPECT(gem_run_arm64ec(&context, 1) == GEM_STOP_INVARIANT_VIOLATION);
+    ExpectInvalidContextUnchanged(fixture, context);
+
+    gem_context_initialize(&context, kTebA, GEM_ISA_ARM64EC);
+    context.layout_version += 1U;
+    ExpectInvalidContextUnchanged(fixture, context);
+
+    gem_context_initialize(&context, kTebA, GEM_ISA_ARM64EC);
+    context.context_size -= 1U;
+    ExpectInvalidContextUnchanged(fixture, context);
+
+    gem_context_initialize(&context, kTebA, GEM_ISA_ARM64EC);
+    context.teb = 0U;
+    context.x[18] = 0U;
+    ExpectInvalidContextUnchanged(fixture, context);
+
+    gem_context_initialize(&context, kTebA, GEM_ISA_ARM64EC);
+    context.x[18] = kTebB;
+    ExpectInvalidContextUnchanged(fixture, context);
 
     MapCode(fixture.memory, kCode, {NOP, RET});
     InitContext(context);
@@ -458,6 +488,70 @@ void ExpectForbidden(Fixture &fixture, u32 instruction, gem_thread_context &cont
     EXPECT(info.engine_status == instruction);
 }
 
+void TestMetadataCheckedX64Boundary() {
+    Fixture fixture;
+    pe_arm64x_fixture pe_fixture{};
+    gem_pe_arm64x_image *image = nullptr;
+    constexpr u64 image_base = PE_ARM64X_FIXTURE_IMAGE_BASE;
+    constexpr u64 arm64_code = image_base + 0x1000U;
+    constexpr u64 arm64ec_code = image_base + 0x1400U;
+    constexpr u64 x64_target = image_base + 0x1901U;
+
+    EXPECT(pe_arm64x_fixture_build(2U, &pe_fixture));
+    EXPECT(gem_pe_arm64x_parse(pe_fixture.bytes, pe_fixture.size, nullptr, &image) == GEM_PE_OK);
+    EXPECT(gem_arm64ec_runtime_attach_arm64x(fixture.runtime, image, image_base));
+    gem_pe_arm64x_image_destroy(image);
+    pe_arm64x_fixture_destroy(&pe_fixture);
+
+    u64 code_page = image_base + 0x1000U;
+    EXPECT(gem_memory_reserve(fixture.memory, &code_page, GEM_GUEST_PAGE_SIZE) == GEM_MEMORY_OK);
+    EXPECT(gem_memory_commit(fixture.memory, code_page, GEM_GUEST_PAGE_SIZE, GEM_PAGE_READWRITE) ==
+           GEM_MEMORY_OK);
+    /* Native ARM64 metadata ranges may use registers that ARM64EC reserves. */
+    constexpr u32 add_x0_x13_x2 = 0x8b000000U | (13U << 5U) | (2U << 16U);
+    WriteWord(fixture.memory, arm64_code, add_x0_x13_x2);
+    WriteWord(fixture.memory, arm64ec_code, BR_X0);
+    EXPECT(gem_memory_protect(fixture.memory, code_page, GEM_GUEST_PAGE_SIZE, GEM_PAGE_EXECUTE_READ,
+                              nullptr) == GEM_MEMORY_OK);
+    gem_thread_context context{};
+    InitContext(context, arm64_code);
+    context.x[13] = 40U;
+    context.x[2] = 2U;
+    EXPECT(Run(fixture, context, 1) == GEM_STOP_BUDGET_EXPIRED);
+    EXPECT(context.x[0] == 42U && context.pc == arm64_code + sizeof(u32));
+
+    InitContext(context, arm64ec_code);
+    context.x[0] = x64_target;
+    EXPECT(Run(fixture, context, 8) == GEM_STOP_ARCH_TRANSITION);
+    EXPECT(context.pc == x64_target);
+    gem_arm64ec_stop_info info{};
+    EXPECT(gem_arm64ec_runtime_last_stop_info(fixture.runtime, &info));
+    EXPECT(info.instructions_retired == 1U);
+    EXPECT(info.fault_address == x64_target);
+    EXPECT(info.access == GEM_ARM64EC_ACCESS_NONE);
+
+    /* The x64 target is intentionally unmapped. Metadata stops before either
+     * the manual fetch or Dynarmic's code callback can request its bytes. */
+    InitContext(context, x64_target);
+    EXPECT(Run(fixture, context, 8) == GEM_STOP_ARCH_TRANSITION);
+    EXPECT(context.pc == x64_target);
+    EXPECT(gem_arm64ec_runtime_last_stop_info(fixture.runtime, &info));
+    EXPECT(info.instructions_retired == 0U && info.fault_address == x64_target &&
+           info.access == GEM_ARM64EC_ACCESS_NONE);
+
+    InitContext(context, image_base + 0x2000U);
+    const gem_thread_context before = context;
+    EXPECT(Run(fixture, context, 8) == GEM_STOP_INVARIANT_VIOLATION);
+    gem_thread_context expected = before;
+    expected.stop_reason = GEM_STOP_INVARIANT_VIOLATION;
+    EXPECT(std::memcmp(&context, &expected, sizeof(context)) == 0);
+
+    /* Metadata mode cannot escape through the unchecked legacy sentinel. */
+    InitContext(context, kTransition);
+    EXPECT(Run(fixture, context, 8) == GEM_STOP_INVARIANT_VIOLATION);
+    EXPECT(context.pc == kTransition);
+}
+
 void TestForbiddenRegisters() {
     constexpr std::array<u32, 5> forbidden_gprs = {13U, 14U, 23U, 24U, 28U};
     constexpr std::array<u32, 16> forbidden_vecs = {16U, 17U, 18U, 19U, 20U, 21U, 22U, 23U,
@@ -602,6 +696,58 @@ void TestForbiddenPriorityAndInvalidation() {
     }
 }
 
+struct BoundaryProbe {
+    u64 address;
+    unsigned calls;
+};
+
+gem_arm64ec_boundary_action BrokerBoundary(void *opaque, u64 pc, gem_thread_context *context,
+                                           gem_arm64ec_boundary_kind *kind) {
+    auto *probe = static_cast<BoundaryProbe *>(opaque);
+    if (pc != probe->address)
+        return GEM_ARM64EC_BOUNDARY_NOT_HANDLED;
+    ++probe->calls;
+    *kind = GEM_ARM64EC_BOUNDARY_CHECK_ICALL;
+    context->x[9] = context->x[11];
+    context->x[11] = context->x[10];
+    context->pc = context->x[30];
+    return GEM_ARM64EC_BOUNDARY_RESUME;
+}
+
+gem_arm64ec_boundary_action InvalidStopBoundary(void *, u64, gem_thread_context *context,
+                                                gem_arm64ec_boundary_kind *kind) {
+    *kind = GEM_ARM64EC_BOUNDARY_DISPATCH_CALL;
+    context->x[18] ^= 1U;
+    return GEM_ARM64EC_BOUNDARY_STOP;
+}
+
+void TestPrefetchBoundaryBroker() {
+    Fixture fixture;
+    constexpr u64 helper = 0x600000000000ULL;
+    MapCode(fixture.memory, kCode, {BR_X0, RET});
+    BoundaryProbe probe{helper, 0};
+    EXPECT(gem_arm64ec_runtime_set_boundary_broker(fixture.runtime, BrokerBoundary, &probe));
+    gem_thread_context context{};
+    InitContext(context);
+    context.x[0] = helper;
+    context.x[10] = kCode + 4U;
+    context.x[11] = 0x12345678U;
+    context.x[30] = kHostReturn;
+    EXPECT(Run(fixture, context, 8) == GEM_STOP_HOST_RETURN);
+    EXPECT(probe.calls == 1U);
+    EXPECT(context.x[9] == 0x12345678U && context.x[11] == kCode + 4U);
+    EXPECT(gem_arm64ec_runtime_transition_count(fixture.runtime) == 1U);
+
+    EXPECT(gem_arm64ec_runtime_set_boundary_broker(fixture.runtime, InvalidStopBoundary, nullptr));
+    InitContext(context);
+    const gem_thread_context before = context;
+    EXPECT(Run(fixture, context, 8) == GEM_STOP_INVARIANT_VIOLATION);
+    gem_thread_context expected = before;
+    expected.stop_reason = GEM_STOP_INVARIANT_VIOLATION;
+    EXPECT(std::memcmp(&context, &expected, sizeof(context)) == 0);
+    EXPECT(gem_arm64ec_runtime_transition_count(fixture.runtime) == 0U);
+}
+
 void TestSelfModifyingCodeAndCacheMaintenance() {
     Fixture fixture;
     MapCode(fixture.memory, kCode, {MOV_X2_1, RET}, GEM_PAGE_EXECUTE_READWRITE);
@@ -663,8 +809,10 @@ int main() {
     TestFaultsAndFourKiBProtections();
     TestBudgetedLoop();
     TestStopReasons();
+    TestMetadataCheckedX64Boundary();
     TestForbiddenRegisters();
     TestForbiddenPriorityAndInvalidation();
+    TestPrefetchBoundaryBroker();
     TestSelfModifyingCodeAndCacheMaintenance();
     return 0;
 }

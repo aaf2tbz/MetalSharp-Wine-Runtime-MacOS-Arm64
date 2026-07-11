@@ -5,6 +5,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define PE_ARM64X_FIXTURE_IMAGE_BASE UINT64_C(0x0000000180000000)
 #define PE_ARM64X_FIXTURE_SIZE_OF_IMAGE UINT32_C(0x4000)
 #define PE_ARM64X_FIXTURE_TEXT_RVA UINT32_C(0x1000)
@@ -32,5 +36,9 @@ size_t pe_arm64x_fixture_rva_to_offset(uint32_t rva);
 void pe_arm64x_fixture_put_u16(uint8_t *bytes, size_t offset, uint16_t value);
 void pe_arm64x_fixture_put_u32(uint8_t *bytes, size_t offset, uint32_t value);
 void pe_arm64x_fixture_put_u64(uint8_t *bytes, size_t offset, uint64_t value);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

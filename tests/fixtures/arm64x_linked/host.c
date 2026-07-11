@@ -31,7 +31,14 @@ int main(void) {
     if (fixture_variadic(4, 3, -5, 17, 9) != 24)
         return fail("variadic result");
     if (fixture_indirect_x64(12) != 43)
-        return fail("indirect x64 result");
+        return fail("indirect x64 integer result");
+    if (fabs(fixture_indirect_x64_floating(2.5) - 4.5) > 0.000001)
+        return fail("indirect x64 floating result");
+    output = fixture_indirect_x64_aggregate(input);
+    if (output.first != 44 || output.second != 36)
+        return fail("indirect x64 aggregate result");
+    if (fixture_indirect_x64_variadic(4, 3, -5, 17, 9) != 24)
+        return fail("indirect x64 variadic result");
     if (fixture_import_probe() != 1u)
         return fail("import probe");
     printf("ARM64X linked fixture native execution passed\n");

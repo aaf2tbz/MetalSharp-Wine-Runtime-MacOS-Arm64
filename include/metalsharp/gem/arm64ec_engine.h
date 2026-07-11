@@ -16,6 +16,28 @@ extern "C" {
 #define GEM_ARM64EC_DEFAULT_ARCH_TRANSITION_SENTINEL UINT64_C(0xffffffffffffffe0)
 
 struct gem_arm64ec_runtime;
+struct gem_pe_arm64x_image;
+
+enum gem_arm64ec_boundary_kind {
+    GEM_ARM64EC_BOUNDARY_CHECK_ICALL = 1,
+    GEM_ARM64EC_BOUNDARY_CHECK_ICALL_CFG = 2,
+    GEM_ARM64EC_BOUNDARY_DISPATCH_CALL = 3,
+    GEM_ARM64EC_BOUNDARY_DISPATCH_RETURN = 4,
+};
+
+enum gem_arm64ec_boundary_action {
+    GEM_ARM64EC_BOUNDARY_NOT_HANDLED = 0,
+    GEM_ARM64EC_BOUNDARY_RESUME = 1,
+    GEM_ARM64EC_BOUNDARY_STOP = 2,
+    GEM_ARM64EC_BOUNDARY_FAIL = 3,
+};
+
+/* Invoked immediately before a guest instruction fetch. The callback may
+ * broker only an address it recognizes. RESUME must change context->pc;
+ * STOP leaves the approved boundary unfetched; FAIL is fail-closed. */
+typedef enum gem_arm64ec_boundary_action (*gem_arm64ec_boundary_fn)(
+    void *opaque, uint64_t pc, struct gem_thread_context *context,
+    enum gem_arm64ec_boundary_kind *out_kind);
 
 enum gem_arm64ec_memory_access {
     GEM_ARM64EC_ACCESS_NONE = 0,
@@ -28,6 +50,7 @@ struct gem_arm64ec_runtime_config {
     uint64_t host_return_sentinel;
     uint64_t arch_transition_sentinel;
     uint64_t max_budget;
+    uint64_t max_transitions;
 };
 
 struct gem_arm64ec_stop_info {
@@ -54,11 +77,22 @@ gem_arm64ec_runtime_create(struct gem_memory *memory,
                            const struct gem_arm64ec_runtime_config *config);
 void gem_arm64ec_runtime_destroy(struct gem_arm64ec_runtime *runtime);
 
+/* Attaches an immutable metadata clone. Runtime execution is then restricted
+ * to checked ARM64/ARM64EC ranges and stops before metadata-classified x64.
+ * This API is thread-confined and rejects replacement while a run is active. */
+bool gem_arm64ec_runtime_attach_arm64x(struct gem_arm64ec_runtime *runtime,
+                                       const struct gem_pe_arm64x_image *image,
+                                       uint64_t loaded_image_base);
+
 enum gem_stop_reason gem_arm64ec_runtime_run(struct gem_arm64ec_runtime *runtime,
                                              struct gem_thread_context *context, uint64_t budget);
 
 bool gem_arm64ec_runtime_last_stop_info(const struct gem_arm64ec_runtime *runtime,
                                         struct gem_arm64ec_stop_info *out_info);
+
+bool gem_arm64ec_runtime_set_boundary_broker(struct gem_arm64ec_runtime *runtime,
+                                             gem_arm64ec_boundary_fn broker, void *opaque);
+uint64_t gem_arm64ec_runtime_transition_count(const struct gem_arm64ec_runtime *runtime);
 
 void gem_arm64ec_runtime_invalidate_code(struct gem_arm64ec_runtime *runtime, uint64_t address,
                                          uint64_t size);

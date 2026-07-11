@@ -744,6 +744,45 @@ enum gem_pe_status gem_pe_arm64x_parse(const uint8_t *bytes, size_t byte_count,
     return GEM_PE_OK;
 }
 
+enum gem_pe_status gem_pe_arm64x_image_clone(const struct gem_pe_arm64x_image *image,
+                                             struct gem_pe_arm64x_image **out_image) {
+    struct gem_pe_arm64x_image *copy = NULL;
+
+    if (image == NULL || out_image == NULL)
+        return GEM_PE_ERROR_INVALID_ARGUMENT;
+    *out_image = NULL;
+    copy = (struct gem_pe_arm64x_image *)calloc(1U, sizeof(*copy));
+    if (copy == NULL)
+        return GEM_PE_ERROR_LIMIT_EXCEEDED;
+    copy->summary = image->summary;
+    copy->byte_count = image->byte_count;
+    copy->size_of_headers = image->size_of_headers;
+
+#define GEM_CLONE_ARRAY(field, count)                                                              \
+    do {                                                                                           \
+        size_t bytes = 0;                                                                          \
+        if ((count) != 0U) {                                                                       \
+            if (!checked_mul_size((count), sizeof(*copy->field), &bytes)) {                        \
+                gem_pe_arm64x_image_destroy(copy);                                                 \
+                return GEM_PE_ERROR_OVERFLOW;                                                      \
+            }                                                                                      \
+            copy->field = malloc(bytes);                                                           \
+            if (copy->field == NULL) {                                                             \
+                gem_pe_arm64x_image_destroy(copy);                                                 \
+                return GEM_PE_ERROR_LIMIT_EXCEEDED;                                                \
+            }                                                                                      \
+            memcpy(copy->field, image->field, bytes);                                              \
+        }                                                                                          \
+    } while (0)
+    GEM_CLONE_ARRAY(sections, (size_t)image->summary.section_count);
+    GEM_CLONE_ARRAY(code_ranges, image->summary.code_range_count);
+    GEM_CLONE_ARRAY(entry_ranges, image->summary.entry_range_count);
+    GEM_CLONE_ARRAY(redirections, image->summary.redirection_count);
+#undef GEM_CLONE_ARRAY
+    *out_image = copy;
+    return GEM_PE_OK;
+}
+
 void gem_pe_arm64x_image_destroy(struct gem_pe_arm64x_image *image) {
     if (image == NULL)
         return;

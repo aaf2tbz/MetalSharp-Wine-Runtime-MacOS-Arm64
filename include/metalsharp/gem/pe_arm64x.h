@@ -115,6 +115,9 @@ enum gem_pe_status gem_pe_arm64x_parse(const uint8_t *bytes, size_t byte_count,
                                        const struct gem_pe_arm64x_parse_options *options,
                                        struct gem_pe_arm64x_image **out_image);
 void gem_pe_arm64x_image_destroy(struct gem_pe_arm64x_image *image);
+/* Produces an independent immutable metadata copy. */
+enum gem_pe_status gem_pe_arm64x_image_clone(const struct gem_pe_arm64x_image *image,
+                                             struct gem_pe_arm64x_image **out_image);
 
 enum gem_pe_status gem_pe_arm64x_get_summary(const struct gem_pe_arm64x_image *image,
                                              struct gem_pe_arm64x_summary *out_summary);

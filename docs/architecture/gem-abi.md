@@ -122,6 +122,10 @@ The concrete structure may not alias guest x18 solely to host x18. At every gues
 
 Inputs: target and thunk state in x9/x10/x11 according to the specific checker form. Preserve x0-x8, x15, q0-q7. Classify targets from ARM64X CHPE code maps, never instruction bytes.
 
+The current implementation provides only the metadata target classifier. It intentionally does
+not claim checker register mutations or helper dispatch. CFG authorization is a distinct,
+fail-closed policy API; metadata classification never implies CFG approval.
+
 ### ARM64EC to x64
 
 Execute the compiler-generated signature-specific exit thunk. Trap the dispatch helper operation, preserve its `blr x16` hint/return contract, then convert canonical state into Blink.
@@ -129,6 +133,11 @@ Execute the compiler-generated signature-specific exit thunk. Trap the dispatch 
 ### x64 to ARM64EC
 
 Use CHPE metadata and the four-byte descriptor before an ARM64EC function to locate its entry thunk. Pop the x64 return address into guest LR, align SP to 16 bytes, retain original x64 SP in the required entry state, and preserve full XMM6-XMM15.
+
+This is a required future contract, not accepted implementation behavior. The current resolver
+reads all four descriptor bytes transactionally through GEM but deterministically reports an
+unsupported descriptor because no reviewed evidence in this repository establishes the encoding.
+It does not guess an entry thunk or mutate canonical state.
 
 ## Stop reasons
 
