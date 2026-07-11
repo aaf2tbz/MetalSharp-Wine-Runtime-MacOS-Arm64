@@ -91,35 +91,35 @@ Preferred evaluation order:
 
 ## Milestone 4 — ARM64EC checker and thunk execution
 
-**Status: authentic linked fixture accepted; engine execution pending.** Issue #10 and native
-Windows ARM64 CI run `29146642211` satisfied the external Microsoft-linked ARM64X prerequisite.
-The same-job source-only pipeline produced, inspected, compared, and natively executed two clean
-build-tree images without retaining Microsoft artifacts. This does not itself prove issue #11:
-relocated checker/entry/exit paths still require stage-specific probe evidence and execution
-through pinned Dynarmic. Raw COFF and synthetic metadata remain non-accepting substitutes.
+**Status: complete.** Issues #10 and #11 are closed. Native Windows ARM64 CI run
+`29168212337` produced and independently inspected two clean Microsoft-linked ARM64X builds, then
+executed their authentic checker, entry-thunk, and signature-specific exit paths through pinned
+Dynarmic. Every exit stopped at its distinct metadata-classified x64 boundary with Blink unloaded
+and zero x64 instructions fetched. Generated Microsoft artifacts remained build-tree-only; raw
+COFF and synthetic metadata remain non-accepting substitutes.
 
 - [x] Generate authentic Microsoft-linked ARM64X fixtures from source in runner-temporary build trees.
 - [x] Implement target classification against the Milestone 1 code map.
-- [ ] Implement `__os_arm64x_check_icall` behavior for ARM64EC and x64 targets.
-- [ ] Add CFG-form checker interfaces while keeping policy separate from architecture dispatch.
-- [ ] Preserve x0-x8, x15, and q0-q7 exactly as required.
-- [ ] Resolve the four-byte ARM64EC entry-thunk descriptor safely.
-- [ ] Execute signature-specific integer, floating-point, structure, and variadic thunk fixtures.
+- [x] Implement `__os_arm64x_check_icall` behavior for ARM64EC and x64 targets.
+- [x] Add CFG-form checker interfaces while keeping policy separate from architecture dispatch.
+- [x] Preserve x0-x8, x15, and q0-q7 exactly as required.
+- [x] Resolve the four-byte ARM64EC entry-thunk descriptor safely.
+- [x] Execute signature-specific integer, floating-point, structure, and variadic thunk fixtures.
 - [x] Validate disallowed ARM64EC register use as a deterministic failure.
 - [x] Inspect linked load-config and CHPE records with checked file-offset/RVA/VA conversion; do not infer linked semantics from raw COFF sections.
-- [ ] Prove relocation, import, alias, and local-exit-thunk resolution to a real metadata-classified x64 target.
+- [x] Prove relocation, import, alias, and local-exit-thunk resolution to a real metadata-classified x64 target.
 
-**Exit gate:** open after the linked-producer prerequisite passed, but not yet complete. A new
-native Windows ARM64 run must execute the authentic generated checker, entry thunk, and exit thunk
-through pinned Dynarmic at a forced nonpreferred GEM base, cover integer/floating/aggregate/
-variadic paths, and stop before fetching the metadata-classified x64 boundary. Descriptor,
-relocation, import, and alias behavior must be consumed only from checked native probe evidence;
-no raw-COFF or synthetic-metadata result satisfies this gate.
+**Exit gate:** passed — run `29168212337` validated the forced-nonpreferred-base linked images,
+checked descriptor and checker evidence, executed all generated paths through pinned Dynarmic,
+preserved the fixed 720-byte canonical context and x18/TEB contract, and stopped before each x64
+boundary without Blink. Repository policy, formatting, native macOS ARM64 conformance,
+zero-Rosetta auditing, clean-build reproducibility, and generated-artifact leakage checks passed in
+the same run.
 
 ## Cross-cutting correctness track — x86 memory ordering and host-page isolation
 
-This track may proceed while Milestone 4's engine-execution work remains unresolved, but it
-cannot bypass that milestone's exit gate.
+Milestone 4 is complete. This track now supplies the memory-order and guest-page correctness
+prerequisites for the Milestone 5 hybrid round trip and cannot be bypassed by later integration.
 
 - [ ] Specify the observable x86-TSO contract from authoritative architecture documentation, including permitted Store→Load behavior.
 - [ ] Inventory Blink interpreter/JIT loads, stores, locked operations, fences, self-modifying-code handling, fault ordering, and host-compiler assumptions.
