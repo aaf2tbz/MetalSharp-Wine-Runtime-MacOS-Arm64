@@ -185,6 +185,41 @@ jobs:
             & "${{ runner.temp }}\arm64x-fixture-$name\arm64ec\Release\arm64x_fixture_host.exe"
             if ($LASTEXITCODE -ne 0) { throw "validation host $name exited with $LASTEXITCODE" }
           }
+      - name: Build native pinned-Dynarmic issue 11 probe
+        shell: pwsh
+        run: |
+          $build = "${{ runner.temp }}\arm64x-issue11-probe"
+          if (Test-Path -LiteralPath $build) { throw 'issue 11 probe build directory must be initially absent' }
+          cmake -S . -B $build -G 'Visual Studio 17 2022' -A ARM64 `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DMSWR_WARNINGS_AS_ERRORS=ON `
+            -DMSWR_ENABLE_ARM64EC_ENGINE=ON `
+            -DMSWR_ENGINE_CONFORMANCE=OFF `
+            -DMSWR_BUILD_ARM64X_ISSUE11_PROBE=ON `
+            -DBUILD_TESTING=OFF
+          if ($LASTEXITCODE -ne 0) { throw "issue 11 probe configure exited with $LASTEXITCODE" }
+          cmake --build $build --config Release --target arm64x_issue11_probe -- /m:1
+          if ($LASTEXITCODE -ne 0) { throw "issue 11 probe build exited with $LASTEXITCODE" }
+      - name: Execute authentic linked paths through pinned Dynarmic
+        shell: pwsh
+        run: |
+          $probe = "${{ runner.temp }}\arm64x-issue11-probe\Release\arm64x_issue11_probe.exe"
+          foreach ($name in @('a', 'b')) {
+            $root = "${{ runner.temp }}\arm64x-fixture-$name"
+            $manifestPath = "$root\arm64x-fixture-build.manifest.json"
+            $inspectionPath = "$root\arm64x-fixture-inspection.json"
+            $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+            $inspectionHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $inspectionPath).Hash.ToLowerInvariant()
+            & $probe "$root\arm64ec\Release\arm64x_fixture.dll" $manifest.outputs.dll.sha256 `
+              $inspectionHash "$root\arm64x-issue11-execution.json"
+            if ($LASTEXITCODE -ne 0) { throw "issue 11 execution probe $name exited with $LASTEXITCODE" }
+          }
+          pwsh -File tools/windows/validate-arm64x-issue11-evidence.ps1 `
+            -InspectionA "${{ runner.temp }}\arm64x-fixture-a\arm64x-fixture-inspection.json" `
+            -ExecutionA "${{ runner.temp }}\arm64x-fixture-a\arm64x-issue11-execution.json" `
+            -InspectionB "${{ runner.temp }}\arm64x-fixture-b\arm64x-fixture-inspection.json" `
+            -ExecutionB "${{ runner.temp }}\arm64x-fixture-b\arm64x-issue11-execution.json"
+          Get-Content -Raw -LiteralPath "${{ runner.temp }}\arm64x-fixture-a\arm64x-issue11-execution.json"
       - name: Reject generated binary leakage
         shell: pwsh
         run: |

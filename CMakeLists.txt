@@ -10,6 +10,7 @@ option(MSWR_ENGINE_DYNARMIC "Use Dynarmic as the ARM64EC correctness engine back
 option(MSWR_ENGINE_CONFORMANCE "Build ARM64EC engine conformance tests" OFF)
 option(MSWR_ZERO_ROSETTA_AUDIT "Build/run native ARM64 macOS zero-Rosetta audit tests" OFF)
 option(MSWR_FETCH_DYNARMIC "Fetch the pinned Dynarmic dependency when engine support is enabled" ON)
+option(MSWR_BUILD_ARM64X_ISSUE11_PROBE "Build the native Windows ARM64 issue #11 probe" OFF)
 # Raw ARM64EC COFF is structural research only: it is not a linked ARM64X fixture.
 option(MSWR_GENERATE_ARM64EC_THUNK_FIXTURES "Generate non-binding LLVM ARM64EC COFF research evidence" OFF)
 
@@ -125,6 +126,16 @@ if(MSWR_ENABLE_ARM64EC_ENGINE)
     target_link_libraries(metalsharp_gem PRIVATE dynarmic)
 endif()
 mswr_enable_warnings(metalsharp_gem)
+
+if(MSWR_BUILD_ARM64X_ISSUE11_PROBE)
+    if(NOT WIN32 OR NOT MSWR_ENABLE_ARM64EC_ENGINE)
+        message(FATAL_ERROR "MSWR_BUILD_ARM64X_ISSUE11_PROBE requires Windows and the ARM64EC engine")
+    endif()
+    add_executable(arm64x_issue11_probe tools/ci/arm64x-issue11-probe.cpp)
+    target_link_libraries(arm64x_issue11_probe PRIVATE metalsharp_gem)
+    target_compile_features(arm64x_issue11_probe PRIVATE cxx_std_20)
+    mswr_enable_warnings(arm64x_issue11_probe)
+endif()
 
 if(BUILD_TESTING)
     add_executable(context_test tests/context_test.c)
