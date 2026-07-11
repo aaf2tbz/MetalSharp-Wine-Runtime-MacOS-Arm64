@@ -91,6 +91,26 @@ jobs:
       - run: arch -arm64 ctest --test-dir build-engine --output-on-failure -L gem.engine
       - run: tools/ci/audit-zero-rosetta.sh build-engine
 
+  page-isolation:
+    name: 4 KiB page isolation (native macOS ARM64, 16 KiB host page)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - run: test "$(uname -m)" = "arm64"
+      - run: test "$(sysctl -in sysctl.proc_translated 2>/dev/null || echo 0)" = "0"
+      - run: test "$(sysctl -n hw.pagesize)" = "16384"
+      - run: >-
+          arch -arm64 cmake -S . -B build-page-isolation
+          -DCMAKE_BUILD_TYPE=Debug
+          -DMSWR_WARNINGS_AS_ERRORS=ON
+      - run: arch -arm64 cmake --build build-page-isolation --parallel --target memory_page_isolation_test
+      - run: >-
+          arch -arm64 ctest --test-dir build-page-isolation
+          --output-on-failure --repeat until-fail:100 -L page-isolation
+      - run: tools/ci/audit-zero-rosetta.sh build-page-isolation
+
   blink-tso:
     name: Blink x86-TSO conformance (native macOS ARM64)
     runs-on: macos-15

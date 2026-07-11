@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.24)
 project(metalsharp_wine_runtime VERSION 0.1.0 LANGUAGES C CXX)
 
 include(CTest)
+find_package(Threads REQUIRED)
 
 option(MSWR_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" ON)
 option(MSWR_ENABLE_ARM64EC_ENGINE "Build the selected ARM64EC correctness engine backend" OFF)
@@ -62,6 +63,7 @@ add_library(metalsharp_gem STATIC
     src/gem/pe_arm64x.c)
 target_include_directories(metalsharp_gem PUBLIC include)
 target_compile_features(metalsharp_gem PUBLIC c_std_11)
+target_link_libraries(metalsharp_gem PUBLIC Threads::Threads)
 
 if(MSWR_ENABLE_ARM64EC_ENGINE)
     if(NOT MSWR_ENGINE_DYNARMIC)
@@ -163,6 +165,15 @@ if(BUILD_TESTING)
         mswr_enable_warnings(${test_name})
         add_test(NAME gem.${test_name} COMMAND ${test_name})
     endforeach()
+
+    add_executable(memory_page_isolation_test tests/memory_page_isolation_test.cpp)
+    target_link_libraries(memory_page_isolation_test PRIVATE metalsharp_gem)
+    target_include_directories(memory_page_isolation_test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/gem")
+    target_compile_features(memory_page_isolation_test PRIVATE cxx_std_17)
+    mswr_enable_warnings(memory_page_isolation_test)
+    add_test(NAME gem.memory_page_isolation COMMAND memory_page_isolation_test)
+    set_tests_properties(gem.memory_page_isolation PROPERTIES LABELS "page-isolation;zero-rosetta")
 
     if(APPLE)
         add_executable(macos_tso_api_probe tests/macos_tso_api_probe.c)
