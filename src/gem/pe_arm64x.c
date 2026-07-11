@@ -582,6 +582,9 @@ static enum gem_pe_status parse_entry_ranges(struct parser_state *state,
         const uint32_t end = read_u32le_unchecked(state->bytes, offset + 4U);
         const uint32_t entry = read_u32le_unchecked(state->bytes, offset + 8U);
         struct gem_pe_arm64x_entry_range *range = &image->entry_ranges[i];
+#ifdef MSWR_PE_ARM64X_DIAGNOSTICS
+        fprintf(stderr, "entry-range[%zu]: start=%#x end=%#x entry=%#x\n", i, start, end, entry);
+#endif
 
         if (start >= end || end > image->summary.size_of_image ||
             entry >= image->summary.size_of_image)
