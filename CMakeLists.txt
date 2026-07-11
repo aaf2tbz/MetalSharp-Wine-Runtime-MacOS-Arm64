@@ -88,7 +88,11 @@ if(MSWR_ENABLE_ARM64EC_ENGINE)
             dynarmic
             URL https://github.com/lioncash/dynarmic/archive/a41c380246d3d9f9874f0f792d234dc0cc17c180.tar.gz
             URL_HASH SHA256=cc0dfec19b7cfb80a649bd994bd0569c0482de1f49448773d2899f30b6a180c3
-            DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+            DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+            PATCH_COMMAND
+                "${CMAKE_COMMAND}"
+                "-DDYNARMIC_SOURCE_DIR=<SOURCE_DIR>"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/patch-dynarmic-windows-arm64.cmake")
         FetchContent_MakeAvailable(dynarmic)
         find_package(Python3 REQUIRED COMPONENTS Interpreter)
         set(MSWR_ARM64EC_DECODER_HEADER
