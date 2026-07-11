@@ -11,8 +11,8 @@
 #endif
 
 typedef struct arm64x_fixture_pair {
-  int32_t first;
-  int32_t second;
+    int32_t first;
+    int32_t second;
 } arm64x_fixture_pair;
 
 #ifdef __cplusplus

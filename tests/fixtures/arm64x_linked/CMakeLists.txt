@@ -22,7 +22,7 @@ if(BUILD_AS_ARM64X STREQUAL "ARM64EC")
   set(x64_object "${CMAKE_CURRENT_BINARY_DIR}/fixture_x64.obj")
   add_custom_command(
     OUTPUT "${x64_object}"
-    COMMAND "${MSWR_X64_CL}" /nologo /c /W4 /WX /O2 /GS- /guard:cf
+    COMMAND "${MSWR_X64_CL}" /nologo /c /W4 /WX /O2 /GS- /Zl /guard:cf
             "/Fo${x64_object}" "${CMAKE_CURRENT_SOURCE_DIR}/fixture_x64.c"
     DEPENDS fixture_x64.c
     VERBATIM)
