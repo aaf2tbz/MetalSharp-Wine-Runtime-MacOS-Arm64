@@ -146,11 +146,14 @@ jobs:
           Write-Output '=== ARM64X linker map ==='
           Get-Content -Raw -LiteralPath "$fixtureRoot\arm64x_fixture.map"
           Write-Output '=== ARM64EC fixture object symbols ==='
-          $fixtureObject = Get-ChildItem -LiteralPath $fixtureRoot -Recurse -Filter 'fixture.c.obj' |
+          $fixtureObject = Get-ChildItem -LiteralPath $fixtureRoot -Recurse -Filter 'fixture.obj' |
             Where-Object { $_.FullName -match 'arm64x_fixture\.dir' } | Select-Object -First 1
           if ($null -eq $fixtureObject) { throw 'ARM64EC fixture object is absent' }
           & $dumpbin /symbols $fixtureObject.FullName
           if ($LASTEXITCODE -ne 0) { throw "dumpbin symbols exited with $LASTEXITCODE" }
+          Write-Output '=== Linked ARM64X disassembly ==='
+          & $dumpbin /disasm "$fixtureRoot\Release\arm64x_fixture.dll"
+          if ($LASTEXITCODE -ne 0) { throw "dumpbin disassembly exited with $LASTEXITCODE" }
       - name: Inspect linked ARM64X fixture A with repository parser
         shell: pwsh
         run: >-
