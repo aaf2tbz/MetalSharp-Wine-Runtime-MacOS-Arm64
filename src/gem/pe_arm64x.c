@@ -547,27 +547,15 @@ static enum gem_pe_status parse_code_map(struct parser_state *state,
             if (start < previous->end_rva)
                 return GEM_PE_ERROR_OVERLAPPING_RANGES;
         }
-        /* A code range may span adjacent executable sections (as Wine's
-         * ARM64X ntdll does).  Coverage, not instruction bytes, is validated. */
+        /* A linker-defined code range may span unmapped section-alignment gaps. The
+         * first and final bytes must still land in executable sections; guest-memory
+         * checks remain responsible for rejecting accesses in an interior gap. */
         {
-            uint32_t cursor = start;
-            size_t section_index = 0;
-            while (cursor < end) {
-                const struct pe_section *section =
-                    find_section_for_span(image, cursor, 1U, &section_index);
-                uint32_t section_end = 0;
-                if (section == NULL || !section_is_executable(section) ||
-                    !checked_add_u32(section->virtual_address, section_virtual_extent(section),
-                                     &section_end) ||
-                    section_end <= cursor) {
-#ifdef MSWR_PE_ARM64X_DIAGNOSTICS
-                    fprintf(stderr, "code-map[%zu]: non-executable/unmapped cursor=%#x end=%#x\n",
-                            i, cursor, end);
-#endif
-                    return GEM_PE_ERROR_BAD_CHPE_METADATA;
-                }
-                cursor = section_end < end ? section_end : end;
-            }
+            const struct pe_section *first = find_section_for_span(image, start, 1U, NULL);
+            const struct pe_section *last = find_section_for_span(image, end - 1U, 1U, NULL);
+            if (first == NULL || last == NULL || !section_is_executable(first) ||
+                !section_is_executable(last))
+                return GEM_PE_ERROR_BAD_CHPE_METADATA;
         }
 
         range->start_rva = start;
