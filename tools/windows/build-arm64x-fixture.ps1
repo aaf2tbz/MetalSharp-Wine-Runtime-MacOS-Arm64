@@ -47,8 +47,8 @@ Invoke-Checked cmake @('-S', $fixtureSource, '-B', $arm64ecBuild, '-G', 'Visual 
 Invoke-Checked cmake @('--build', $arm64ecBuild, '--config', 'Release', '--target', 'arm64x_fixture', 'arm64x_fixture_host', '--', '/m:1')
 
 $dll = Join-Path $arm64ecBuild 'Release\arm64x_fixture.dll'
-$host = Join-Path $arm64ecBuild 'Release\arm64x_fixture_host.exe'
-foreach ($output in @($dll, $host)) { if (-not (Test-Path -LiteralPath $output)) { Fail "missing output $output" } }
+$validationHost = Join-Path $arm64ecBuild 'Release\arm64x_fixture_host.exe'
+foreach ($output in @($dll, $validationHost)) { if (-not (Test-Path -LiteralPath $output)) { Fail "missing output $output" } }
 $manifest = [ordered]@{
   schemaVersion = 1
   producerLock = (Hash $LockFile)
@@ -60,7 +60,7 @@ $manifest = [ordered]@{
   }
   outputs = @{
     dll = @{ path = $dll; sha256 = Hash $dll }
-    host = @{ path = $host; sha256 = Hash $host }
+    host = @{ path = $validationHost; sha256 = Hash $validationHost }
   }
   distribution = 'build-tree-only'
 }
