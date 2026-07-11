@@ -194,7 +194,7 @@ jobs:
           $boostInclude = 'C:\vcpkg\installed\arm64-windows\include'
           if (-not (Test-Path -LiteralPath (Join-Path $boostInclude 'boost\version.hpp'))) {
             if (-not (Test-Path -LiteralPath $vcpkg -PathType Leaf)) { throw 'hosted vcpkg is absent' }
-            & $vcpkg install boost-icl:arm64-windows
+            & $vcpkg install boost-icl:arm64-windows boost-variant:arm64-windows
             if ($LASTEXITCODE -ne 0) { throw "Boost header installation exited with $LASTEXITCODE" }
           }
           if (-not (Test-Path -LiteralPath (Join-Path $boostInclude 'boost\version.hpp'))) { throw 'Boost headers remain absent' }
