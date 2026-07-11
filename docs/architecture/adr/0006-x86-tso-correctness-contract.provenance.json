@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "architectureSource": {
+    "title": "Intel 64 and IA-32 Architectures Software Developer's Manual, Volume 3A",
+    "orderNumber": "325384",
+    "sections": ["10.2", "10.3"],
+    "url": "https://cdrdv2-public.intel.com/671447/325384-sdm-vol-3abcd.pdf",
+    "retrieved": "2026-07-11",
+    "sha256": "8b988bc23b81bc97a7ea6d0cac8bf3ce9e47db106fbb7a2b9d11aa412c93859b"
+  },
+  "blink": {
+    "repository": "https://github.com/jart/blink.git",
+    "revision": "f006a4fc6f9b8de9272504fdff0dbbe5ce5dc580",
+    "license": "ISC",
+    "sourceArchive": "https://github.com/jart/blink/archive/f006a4fc6f9b8de9272504fdff0dbbe5ce5dc580.tar.gz",
+    "sourceArchiveSha256": "e0bad68ba2927a1ca1d53537afee1644e11a1e683d26676a36e5b9b17a63d6af",
+    "reviewedFiles": {
+      "blink/alui.c": "c10803658e87f919d8ad375ad404302340c3efbdc99fa77caebf8ce7fd1c9b9a",
+      "blink/bus.c": "0b961d132aacef5f297bc8e98f6831253a9f206fa426b43b338c13ee6ca9a65e",
+      "blink/jit.c": "22a35a45b3895236f1f69719fe181a53e83496e71ce816739af058ad052badaf",
+      "blink/machine.c": "73a32c95fbc191394c116bd2f41ebba464c963718b3785adaca22c5a93e8dc89",
+      "blink/memory.c": "47966cd086fb5f2960156e55468b058928fd8cb053ba906267800b08daf399a3",
+      "blink/smc.c": "18cccb5762714362b15a57fb758feddd91f3c7c0d34e7de02f3ccfe1ccc2bce2",
+      "blink/string.c": "6b1a4d522dbc48eff3d25a109ad45e938c40307e926807b538851c9315026575",
+      "blink/uop.c": "5aec691023af02e77c64ec5227ca3f99e07e51bccef52155f5d0ef982833bc4b",
+      "blink/xchg.c": "4fc99c14a3fbda61e1c36a25369fcf2722c9d96602059016ef4180ac96a0767b"
+    }
+  }
+}

@@ -4,7 +4,7 @@ Date: 2026-07-10
 
 ## Status
 
-Accepted — linked-image prerequisite satisfied; checker/thunk engine conformance remains pending.
+Accepted — linked-image prerequisite and checker/thunk engine conformance satisfied.
 
 ## Decision
 
@@ -69,12 +69,12 @@ repository parser, compared normalized evidence, and executed both native ARM64E
 hosts on `windows-11-arm`. The DLL and all Microsoft-generated OBJ, LIB, EXE, PDB, MAP, and
 inspection outputs remained runner-temporary and were neither committed nor uploaded.
 
-That evidence corrects the former fixture blocker but is not proof of issue #11. Checker, entry-
-thunk, and exit-thunk bytes still must be selected by checked linked metadata, loaded and relocated
-in GEM, and executed through pinned Dynarmic. Any four-byte descriptor arithmetic, checker
-register contract, relocation kind, import binding, or alias behavior must first be emitted by a
-stage-specific native probe and reproduced across two clean builds. Instruction bytes cannot
-supply ISA classification or substitute for that evidence.
+That evidence corrected the former fixture blocker. Issue #11 completion run `29168212337` then
+selected checker, entry-thunk, and exit-thunk paths from checked linked metadata, loaded and
+relocated them in GEM, and executed them through pinned Dynarmic across two clean builds. The
+four-byte descriptor arithmetic, checker contract, relocation, import binding, and alias behavior
+were consumed from stage-specific native evidence. Instruction bytes remain invalid as ISA
+classification or as a substitute for linked evidence.
 
 ## Consequences
 
@@ -84,5 +84,5 @@ and exit thunk symbols, checker call sites, and descriptor words used by the che
 Synthetic metadata remains supplemental malformed/boundary coverage only.
 The repository continues to contain only Apache-2.0 source and build-tree research outputs; it
 contains no copied Windows binary fixture. Dynarmic conformance remains governed by ADR 0004,
-Blink is not introduced for the issue #11 boundary, and Milestone 4 remains open until authentic
-generated checker/thunk paths execute through the pinned engine.
+Blink was not introduced for the issue #11 boundary, and Milestone 4 is complete based on the
+authentic generated execution evidence in run `29168212337`.
