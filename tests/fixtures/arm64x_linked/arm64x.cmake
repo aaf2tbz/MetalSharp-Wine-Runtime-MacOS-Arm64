@@ -32,7 +32,8 @@ elseif(BUILD_AS_ARM64X STREQUAL "ARM64EC")
   endif()
   target_sources(arm64x_fixture PRIVATE ${arm64_objects})
   target_link_options(
-    arm64x_fixture PRIVATE /machine:arm64x "${arm64_definition}" ${arm64_libraries})
+    arm64x_fixture PRIVATE /machine:arm64x "${arm64_definition}" ${arm64_libraries}
+    "/MAP:${CMAKE_CURRENT_BINARY_DIR}/arm64x_fixture.map" /MAPINFO:EXPORTS)
 else()
   message(FATAL_ERROR "BUILD_AS_ARM64X must be ARM64 or ARM64EC")
 endif()

@@ -140,8 +140,17 @@ jobs:
           $vcVersion = (Get-ChildItem -LiteralPath $vcRoot -Directory | Sort-Object Name -Descending | Select-Object -First 1).Name
           $dumpbin = Join-Path $vcRoot "$vcVersion\bin\Hostarm64\arm64\dumpbin.exe"
           if (-not (Test-Path -LiteralPath $dumpbin -PathType Leaf)) { throw 'ARM64 dumpbin.exe is absent' }
-          & $dumpbin /headers /loadconfig "${{ runner.temp }}\arm64x-fixture-a\arm64ec\Release\arm64x_fixture.dll"
+          $fixtureRoot = "${{ runner.temp }}\arm64x-fixture-a\arm64ec"
+          & $dumpbin /headers /loadconfig "$fixtureRoot\Release\arm64x_fixture.dll"
           if ($LASTEXITCODE -ne 0) { throw "dumpbin exited with $LASTEXITCODE" }
+          Write-Output '=== ARM64X linker map ==='
+          Get-Content -Raw -LiteralPath "$fixtureRoot\arm64x_fixture.map"
+          Write-Output '=== ARM64EC fixture object symbols ==='
+          $fixtureObject = Get-ChildItem -LiteralPath $fixtureRoot -Recurse -Filter 'fixture.c.obj' |
+            Where-Object { $_.FullName -match 'arm64x_fixture\.dir' } | Select-Object -First 1
+          if ($null -eq $fixtureObject) { throw 'ARM64EC fixture object is absent' }
+          & $dumpbin /symbols $fixtureObject.FullName
+          if ($LASTEXITCODE -ne 0) { throw "dumpbin symbols exited with $LASTEXITCODE" }
       - name: Inspect linked ARM64X fixture A with repository parser
         shell: pwsh
         run: >-
