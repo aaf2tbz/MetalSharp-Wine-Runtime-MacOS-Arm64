@@ -128,6 +128,7 @@ int main(void) {
     uint8_t *mapping;
     uint8_t *kuser = NULL;
     uint64_t code;
+    uint32_t old_protection;
     uint32_t wait_count;
     struct gem_wine_process_config process_config;
     struct gem_wine_process_config invalid_process_config;
@@ -179,6 +180,13 @@ int main(void) {
     assert(gem_wine_process_map_identity(process, (uint64_t)(uintptr_t)mapping, mapping,
                                          (uint64_t)host_page,
                                          GEM_WINE_PAGE_EXECUTE_READ) == GEM_WINE_OK);
+    old_protection = 0U;
+    assert(gem_wine_process_protect(process, (uint64_t)(uintptr_t)mapping, (uint64_t)host_page,
+                                    GEM_WINE_PAGE_READONLY, &old_protection) == GEM_WINE_OK);
+    assert(old_protection == GEM_WINE_PAGE_EXECUTE_READ);
+    assert(gem_wine_process_protect(process, (uint64_t)(uintptr_t)mapping, (uint64_t)host_page,
+                                    GEM_WINE_PAGE_EXECUTE_READ, &old_protection) == GEM_WINE_OK);
+    assert(old_protection == GEM_WINE_PAGE_READONLY);
 
     assert(posix_memalign((void **)&kuser, GEM_WINE_GUEST_PAGE_SIZE, GEM_WINE_GUEST_PAGE_SIZE) ==
            0);

@@ -106,8 +106,8 @@ Exhausting the callback count also fails closed as a budget expiration.
 
 ## Required evidence before Wine integration
 
-The bridge implementation is not eligible for a Wine patch until all of the
-following are archived:
+PR #20 may merge only after all of the following bridge-foundation evidence is
+archived:
 
 - warning-clean native ARM64 build;
 - C and C++ header ABI checks;
@@ -119,7 +119,8 @@ following are archived:
 - ASan+UBSan and zero-Rosetta audits;
 - Mach-O dependency and architecture inspection.
 
-Wine integration then needs separate bounded evidence for lifecycle wiring,
-mapping/protection/invalidation, thread startup, syscall and Unix-call dispatch,
-exception conversion, native ARM64 execution, checked ARM64X transitions, x64
-execution, and teardown.
+PR #20 does not claim those items integrate Wine. Separate accepted PRs must
+supply bounded evidence for the clean Wine build (#21), lifecycle plus
+mapping/protection/invalidation wiring (#22), thread startup plus syscall,
+Unix-call, exception, and native ARM64 execution (#23), checked ARM64X and x64
+execution (#24), and packaged teardown, relocation, and release behavior (#25).

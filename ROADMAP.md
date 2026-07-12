@@ -2,7 +2,7 @@
 
 ## First completion target: v0.1 — Integrated deterministic Wine runtime
 
-Milestones 0–5 established a standalone, repeatable ARM64EC → x86_64/Blink → ARM64EC round trip whose canonical state never depends on Darwin x18. Issue #15 expands the v0.1 boundary: the first official release must integrate that substrate into a clean, pinned Wine 11.12 build and publish an audited native ARM64 runtime archive. A standalone engine or vanilla Wine build with an adjacent unused engine is not a v0.1 release. See proposed [ADR 0009](docs/architecture/adr/0009-integrated-wine-v0.1-release.md).
+Milestones 0–5 established a standalone, repeatable ARM64EC → x86_64/Blink → ARM64EC round trip whose canonical state never depends on Darwin x18. Issue #15 is the v0.1 release epic: the first official release must integrate that substrate into a clean, pinned Wine 11.12 build and publish an audited, self-contained native ARM64 runtime archive. PR #20 establishes the versioned Wine/GEM bridge and inert release contracts; Issues #21–#25 divide clean Wine construction, ntdll lifecycle/memory integration, native ARM64 execution, authentic hybrid execution, and final packaging/publication into separately accepted PRs. A standalone engine or vanilla Wine build with an adjacent unused engine is not a v0.1 release. See proposed [ADR 0009](docs/architecture/adr/0009-integrated-wine-v0.1-release.md).
 
 The evidence-corrected assessment in
 [`docs/architecture/arm64ec-arm64x-research-assessment.md`](docs/architecture/arm64ec-arm64x-research-assessment.md)
@@ -165,6 +165,13 @@ zero-Rosetta audits. Local Apple Clang ASan+UBSan passed the complete 15-test ma
 
 ## Milestone 6 — Wine integration and release hardening
 
+- [x] Define and test the versioned native Wine/GEM bridge ABI, component install, exported-symbol allowlist, lifecycle conflicts, checked mapping surface, bounded callbacks, and native ARM64 execution profile in PR #20.
+- [x] Define fail-closed integrated-release asset, evidence, readiness, permission, and publication contracts while leaving publication inert in PR #20.
+- [ ] Complete #21: clean pinned Wine patch queue, Darwin ARM64 loader foundation, and reproducible four-architecture build.
+- [ ] Complete #22: direct ntdll linkage plus GEM process, memory, thread, KUSER, protection, and invalidation integration.
+- [ ] Complete #23: native ARM64 PE execution through GEM with syscall/Unix-call/exception boundaries, bounded `wineboot`, and ARM64 `cmd.exe`.
+- [ ] Complete #24: authentic ARM64EC/x64 execution through the integrated Wine path.
+- [ ] Complete #25: self-contained relocatable package, hardening, reproducibility, evidence, protected-main publication, and post-release verification.
 - [ ] Add deterministic trace format with versioning and redaction.
 - [ ] Add bounded stress tests and randomized state round trips.
 - [ ] Add ASan/UBSan Linux jobs and supported macOS sanitizer coverage.

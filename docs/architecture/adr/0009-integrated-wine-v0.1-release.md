@@ -13,7 +13,7 @@ The existing local Wine 11.12 worktree is research evidence, not release input. 
 
 ## Decision
 
-v0.1.0 will be published only as an actual integrated Wine installation for native Apple silicon. The protected-main release workflow must build pinned Wine 11.12 with an ordered LGPL-2.1-or-later patch series from this repository, build the pinned GEM/Dynarmic/Blink implementation, link it into Wine's selected execution path, and exercise that path before packaging.
+v0.1.0 will be published only as an actual integrated, self-contained Wine installation for native Apple silicon. The protected-main release workflow must build pinned Wine 11.12 with an ordered LGPL-2.1-or-later patch series from this repository, build the pinned GEM/Dynarmic/Blink implementation, link it into Wine's selected execution path, and exercise that path before packaging. Issue #15 tracks the release as an epic; PR #20 establishes the bridge and inert release contracts, and Issues #21–#25 require separate accepted PRs for the clean Wine build, ntdll integration, native ARM64 execution, authentic hybrid execution, and final relocatable release.
 
 The release gate requires all of the following:
 
@@ -23,7 +23,7 @@ The release gate requires all of the following:
 4. `wineboot --init`, ARM64 `cmd.exe /c exit`, and accepted ARM64EC/x64 transition probes run with fresh prefixes under bounded process-group and log limits.
 5. Every packaged Mach-O and every observed process is native ARM64. Rosetta, translated dependencies, native guest-PC invocation, process-global signal stepping, and guessed `ucontext_t` mutation are prohibited.
 6. Packaging is deterministic and allowlisted. The primary asset is `metalsharp-wine-v0.1.0-macos-arm64.tar.zst`; checksums, SPDX SBOM, provenance, known limitations, and an evidence index are separate release assets and are also represented inside the archive where appropriate.
-7. Publication runs only for the protected `main` commit produced by the final Issue #15 merge. Pull requests may build and validate the candidate but receive no `contents: write` permission and cannot create a release.
+7. Publication runs only for the protected `main` commit produced by the final #25 release PR. Pull requests may build and validate the candidate but receive no `contents: write` permission and cannot create a release.
 8. The publication job receives `contents: write` only after all build, integration-test, package-validation, and evidence gates succeed. The immutable `v0.1.0` tag and release must resolve to that exact tested commit.
 9. The final merge replaces README's development-status notice with an accurate v0.1.0 status and links to the release, known limitations, and evidence. It names only support demonstrated by release CI and continues to identify unaccepted acceleration, graphics, i386, and broader application coverage as out of scope.
 
@@ -31,14 +31,14 @@ A runtime-only archive, a vanilla Wine build with adjacent unused libraries, a p
 
 ## Release workflow shape
 
-The final Issue #15 change introduces a main-only release workflow. It repeats the release-critical build and tests rather than trusting an unrelated workflow run, creates the archive in runner-temporary storage, validates its manifest and architecture, then publishes with the GitHub CLI using the job token. The workflow is idempotent only for an already published release whose tag, commit, and asset hashes match exactly; any mismatch fails.
+PR #20 introduces the main-only release workflow in an intentionally inert state: without the reviewed readiness record it performs no build or publication. The final #25 release PR may add that record only after the intervening issue gates pass. The activated workflow repeats the release-critical build and tests rather than trusting an unrelated workflow run, creates the archive in runner-temporary storage, validates its manifest and architecture, then publishes with the GitHub CLI using the job token. An existing tag or release is never replaced; any pre-existing or mismatched publication fails.
 
 Pull-request CI validates scripts, manifests, patch application, clean Wine builds, runtime tests, and archive reproducibility without publishing. Release assets never pass through an untrusted pull-request artifact.
 
 ## Consequences
 
 - Wine integration moves into Milestone 6 and is part of v0.1 rather than a post-v0.1 plan.
-- Issue #15 is larger, but the first official archive has an honest product meaning.
+- Issue #15 is a multi-PR epic, but the first official archive has an honest product meaning.
 - The local experimental Wine trees remain excluded from source and provenance.
 - DXMT, Winemetal, accelerated ARM64EC execution, and i386 execution remain post-v0.1 unless separately accepted.
 - ADR 0009 remains Proposed until the integrated protected-main release run and published assets satisfy every gate above.

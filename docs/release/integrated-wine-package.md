@@ -1,6 +1,6 @@
 # Integrated Wine v0.1 release package contract
 
-Issue #15 publishes one primary runtime archive:
+Issue #15 is the release epic; its final #25 PR publishes one primary runtime archive:
 
 ```text
 metalsharp-wine-v0.1.0-macos-arm64.tar.zst
@@ -36,7 +36,7 @@ The runtime `lib/` inventory must include `libmetalsharp-gem-wine.0.1.0.dylib` a
 - hashes of the SBOM, integration evidence, evidence index, and known-limitations document;
 - release archive SHA-256 and deterministic packaging parameters in the external publication manifest.
 
-No absolute path, home-directory name, runner-temporary path, token, Wine prefix, crash report, generated debug file, source checkout, or unlisted file may appear in the package.
+No absolute path, home-directory name, runner-temporary path, token, Wine prefix, crash report, generated debug file, source checkout, or unlisted file may appear in the package. The unpacked runtime must operate from an arbitrary clean location while the repository and build trees are unavailable. Every redistributable non-system runtime dependency must be contained in the archive with a relocatable binding; Homebrew paths, adjacent developer checkouts, and temporary install trees are forbidden runtime dependencies.
 
 `wine-integration-evidence.json` binds bounded fresh-prefix results for `wineboot --init`, ARM64 `cmd.exe /c exit`, and accepted ARM64EC/x64 hybrid execution. It also records canonical x18/TEB checks, engine provenance, instruction/transition budgets, process architecture observations, timeout/log limits, and cleanup results.
 
@@ -54,11 +54,11 @@ Two clean builds from the same source and declared toolchain must produce identi
 
 ## Workflow activation
 
-`.github/workflows/release.yml` is intentionally inert on `main` until the final Issue #15 change adds `release/v0.1.0-ready.json`. A pull request must not add that record until `tools/release/build-integrated-wine.sh` exists and all integration, packaging, reproducibility, evidence, and policy checks pass. The readiness record will bind its own schema, version, expected protected-main parent, release script hashes, and accepted evidence criteria; release CI must validate it before using it.
+`.github/workflows/release.yml` is intentionally inert on `main` until the final #25 release PR adds `release/v0.1.0-ready.json`. No earlier pull request may add that record; it remains forbidden until `tools/release/build-integrated-wine.sh` exists and all #21–#25 integration, packaging, reproducibility, evidence, and policy gates pass. The readiness record will bind its own schema, version, expected protected-main parent, release script hashes, and accepted evidence criteria; release CI must validate it before using it.
 
 A premature manual dispatch fails. A normal `main` push without the record succeeds without building or publishing. Once the reviewed record is present, the same workflow run builds the candidate with read-only repository permission, hands it to the publication job through a one-day same-run artifact with an Actions service digest, revalidates it, reconfirms the exact current `main` head, and only then uses a separate `contents: write` job to create the release.
 
-The readiness record must also bind the final README status block. Before the record is admitted, README's current architecture-foundation notice is replaced with the accepted v0.1.0 status, supported scope, predictable `v0.1.0` release URL, known-limitations asset URL, and evidence asset URL. Release validation rejects either the old notice or claims beyond the tested support matrix. This README change lands through the same protected final merge; release automation never pushes an unreviewed documentation commit to `main`.
+The readiness record must also bind the final README status block. Before the record is admitted, README's current architecture-foundation notice is replaced with the accepted v0.1.0 status, supported scope, predictable `v0.1.0` release URL, known-limitations asset URL, and evidence asset URL. Release validation rejects either the old notice or claims beyond the tested support matrix. This README change lands through the same protected final #25 merge; release automation never pushes an unreviewed documentation commit to `main`.
 
 ## Publication assets
 
@@ -72,4 +72,4 @@ The GitHub `v0.1.0` release receives:
 - `evidence-index.json`;
 - `KNOWN-LIMITATIONS.md`.
 
-Release CI compares each uploaded asset's local hash and size to the publication manifest after upload. An existing tag or release is accepted only when it points to the exact tested protected-main commit and all asset hashes match; otherwise publication fails without replacement.
+Release CI compares each uploaded asset's local hash and size to the publication manifest after upload. Any pre-existing `v0.1.0` tag or release fails publication and is never reused or replaced.
