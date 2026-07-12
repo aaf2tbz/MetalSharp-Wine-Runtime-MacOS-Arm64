@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "hybrid_runtime_internal.h"
 #include "metalsharp/gem/arm64ec_target.h"
 #include "metalsharp/gem/context.h"
 #include "metalsharp/gem/context_conversion.h"
@@ -635,6 +636,51 @@ void write_phase_b_trace(const char *path, Harness &harness,
     assert(out.good());
 }
 
+void test_frame_contract_validation() {
+    gem_hybrid_frame_contract valid{};
+    valid.expected_cookie = 7U;
+    valid.observed_cookie = 7U;
+    valid.expected_return_pc = UINT64_C(0x18000406D);
+    valid.observed_return_pc = valid.expected_return_pc;
+    valid.expected_sp = UINT64_C(0x40000FED0);
+    valid.observed_sp = valid.expected_sp;
+    valid.expected_original_x64_sp = UINT64_C(0x40000FED8);
+    valid.observed_original_x64_sp = valid.expected_original_x64_sp;
+    valid.expected_record = valid.expected_return_pc;
+    valid.observed_record = valid.expected_record;
+    valid.depth = 1U;
+    valid.maximum_depth = 2U;
+    valid.active = true;
+    valid.require_record = true;
+    valid.record_readable = true;
+    assert(gem_hybrid_frame_contract_validate(&valid));
+    valid.depth = 2U;
+    assert(gem_hybrid_frame_contract_validate(&valid));
+    valid.depth = 1U;
+    assert(!gem_hybrid_frame_contract_validate(nullptr));
+
+    const auto expect_rejected = [&](auto mutate) {
+        auto malformed = valid;
+        mutate(malformed);
+        assert(!gem_hybrid_frame_contract_validate(&malformed));
+    };
+    expect_rejected([](auto &frame) { frame.active = false; });
+    expect_rejected([](auto &frame) { frame.depth = 0U; });
+    expect_rejected([](auto &frame) { frame.depth = 3U; });
+    expect_rejected([](auto &frame) { frame.maximum_depth = 3U; });
+    expect_rejected([](auto &frame) { frame.observed_cookie ^= 1U; });
+    expect_rejected([](auto &frame) { frame.expected_cookie = 0U; });
+    expect_rejected([](auto &frame) { frame.observed_return_pc += 4U; });
+    expect_rejected([](auto &frame) { frame.observed_sp += 8U; });
+    expect_rejected([](auto &frame) { frame.observed_original_x64_sp += 8U; });
+    expect_rejected([](auto &frame) { frame.record_readable = false; });
+    expect_rejected([](auto &frame) { frame.observed_record += 1U; });
+    valid.require_record = false;
+    valid.record_readable = false;
+    valid.observed_record = 0U;
+    assert(gem_hybrid_frame_contract_validate(&valid));
+}
+
 void assert_stop(gem_hybrid_runtime *runtime, gem_stop_reason reason,
                  gem_hybrid_stop_source source) {
     gem_hybrid_stop_info info{};
@@ -649,6 +695,7 @@ void assert_stop(gem_hybrid_runtime *runtime, gem_stop_reason reason,
 
 int main(int argc, char **argv) {
     assert(argc == 3 || argc == 4);
+    test_frame_contract_validation();
     const auto bytes = read_binary(argv[1]);
     const auto entries = read_map(argv[2]);
     auto harness = make_harness(bytes, entries);
@@ -825,6 +872,99 @@ int main(int argc, char **argv) {
         assert(gem_hybrid_runtime_run_integer_nested(runtime, &reused, &control, config.max_budget,
                                                      nullptr) == GEM_STOP_HOST_RETURN);
         assert(reused.x[0] == 85U);
+
+        const auto reject_control = [&](const gem_hybrid_nested_control &malformed) {
+            auto rejected = initial_context(control.requested_start_va);
+            rejected.x[0] = 10U;
+            const auto entry = rejected;
+            gem_hybrid_roundtrip_stats stats{};
+            assert(gem_hybrid_runtime_run_integer_nested(runtime, &rejected, &malformed,
+                                                         config.max_budget,
+                                                         &stats) == GEM_STOP_INVARIANT_VIOLATION);
+            auto expected = entry;
+            expected.stop_reason = GEM_STOP_INVARIANT_VIOLATION;
+            assert(std::memcmp(&rejected, &expected, sizeof(rejected)) == 0);
+            assert(stats.frame_pushes == stats.frame_pops && stats.frame_pushes <= 2U &&
+                   stats.final_frame_depth == 0U);
+        };
+        auto malformed = control;
+        malformed.version += 1U;
+        reject_control(malformed);
+        malformed = control;
+        malformed.reserved = 1U;
+        reject_control(malformed);
+        malformed = control;
+        malformed.outer_resume_va += 1U;
+        reject_control(malformed);
+        malformed = control;
+        malformed.inner_x64_target_va = control.callback_va;
+        reject_control(malformed);
+        auto wrong_cookie = initial_context(control.requested_start_va);
+        wrong_cookie.transition_cookie = 1U;
+        assert(gem_hybrid_runtime_run_integer_nested(runtime, &wrong_cookie, &control,
+                                                     config.max_budget,
+                                                     nullptr) == GEM_STOP_INVARIANT_VIOLATION);
+
+        /* Supplemental negative mutations retain authentic metadata routing.
+         * They replace only the admitted inner x64 instruction bytes to prove
+         * unsupported execution and a third transition attempt fail closed at
+         * depth two; the authentic bytes are restored before each retry. */
+        const auto inner_page = control.inner_x64_target_va & ~UINT64_C(0xFFF);
+        std::array<std::uint8_t, 8> authentic_inner{};
+        std::uint32_t old_protection = 0U;
+        assert(gem_memory_read(harness.memory, control.inner_x64_target_va, authentic_inner.data(),
+                               authentic_inner.size()) == GEM_MEMORY_OK);
+        assert(gem_memory_protect(harness.memory, inner_page, GEM_GUEST_PAGE_SIZE,
+                                  GEM_PAGE_EXECUTE_READWRITE, &old_protection) == GEM_MEMORY_OK);
+        const std::uint8_t unsupported = 0x50;
+        assert(gem_memory_write(harness.memory, control.inner_x64_target_va, &unsupported,
+                                sizeof(unsupported)) == GEM_MEMORY_OK);
+        auto unsupported_context = initial_context(control.requested_start_va);
+        unsupported_context.x[0] = 10U;
+        const auto unsupported_entry = unsupported_context;
+        gem_hybrid_roundtrip_stats unsupported_stats{};
+        assert(gem_hybrid_runtime_run_integer_nested(runtime, &unsupported_context, &control,
+                                                     config.max_budget, &unsupported_stats) ==
+               GEM_STOP_UNSUPPORTED_INSTRUCTION);
+        auto unsupported_expected = unsupported_entry;
+        unsupported_expected.stop_reason = GEM_STOP_UNSUPPORTED_INSTRUCTION;
+        assert(std::memcmp(&unsupported_context, &unsupported_expected,
+                           sizeof(unsupported_context)) == 0);
+        assert(unsupported_stats.frame_pushes == 2U && unsupported_stats.frame_pops == 2U &&
+               unsupported_stats.maximum_frame_depth == 2U &&
+               unsupported_stats.final_frame_depth == 0U);
+        assert_stop(runtime, GEM_STOP_UNSUPPORTED_INSTRUCTION, GEM_HYBRID_STOP_SOURCE_X64);
+        assert(gem_memory_write(harness.memory, control.inner_x64_target_va, authentic_inner.data(),
+                                1U) == GEM_MEMORY_OK);
+        unsupported_context = unsupported_entry;
+        assert(gem_hybrid_runtime_run_integer_nested(runtime, &unsupported_context, &control,
+                                                     config.max_budget,
+                                                     nullptr) == GEM_STOP_HOST_RETURN);
+
+        const std::array<std::uint8_t, 5> third_transition{{0xE8, 0x4B, 0xE7, 0xFF, 0xFF}};
+        assert(gem_memory_write(harness.memory, control.inner_x64_target_va,
+                                third_transition.data(), third_transition.size()) == GEM_MEMORY_OK);
+        auto overflow = initial_context(control.requested_start_va);
+        overflow.x[0] = 10U;
+        const auto overflow_entry = overflow;
+        gem_hybrid_roundtrip_stats overflow_stats{};
+        assert(gem_hybrid_runtime_run_integer_nested(runtime, &overflow, &control,
+                                                     config.max_budget, &overflow_stats) ==
+               GEM_STOP_INVARIANT_VIOLATION);
+        auto overflow_expected = overflow_entry;
+        overflow_expected.stop_reason = GEM_STOP_INVARIANT_VIOLATION;
+        assert(std::memcmp(&overflow, &overflow_expected, sizeof(overflow)) == 0);
+        assert(overflow_stats.frame_pushes == 2U && overflow_stats.frame_pops == 2U &&
+               overflow_stats.maximum_frame_depth == 2U && overflow_stats.final_frame_depth == 0U);
+        assert_stop(runtime, GEM_STOP_INVARIANT_VIOLATION, GEM_HYBRID_STOP_SOURCE_BROKER);
+        assert(gem_memory_write(harness.memory, control.inner_x64_target_va, authentic_inner.data(),
+                                authentic_inner.size()) == GEM_MEMORY_OK);
+        overflow = overflow_entry;
+        assert(gem_hybrid_runtime_run_integer_nested(runtime, &overflow, &control,
+                                                     config.max_budget,
+                                                     nullptr) == GEM_STOP_HOST_RETURN);
+        assert(gem_memory_protect(harness.memory, inner_page, GEM_GUEST_PAGE_SIZE, old_protection,
+                                  nullptr) == GEM_MEMORY_OK);
         gem_hybrid_runtime_destroy(runtime);
     }
 
@@ -925,6 +1065,45 @@ int main(int argc, char **argv) {
         assert(gem_hybrid_runtime_run_integer_callback_resume(
                    runtime, &failed, callback.resolved_va, resume, config.max_budget, nullptr) ==
                GEM_STOP_ARCH_TRANSITION);
+
+        /* Supplemental linked-callback mutations exercise the same runtime
+         * frame validator at the dispatch-return boundary. */
+        const auto callback_page = callback.resolved_va & ~UINT64_C(0xFFF);
+        std::array<std::uint8_t, 4> callback_first_instruction{};
+        std::uint32_t callback_old_protection = 0U;
+        assert(gem_memory_read(harness.memory, callback.resolved_va,
+                               callback_first_instruction.data(),
+                               callback_first_instruction.size()) == GEM_MEMORY_OK);
+        assert(gem_memory_protect(harness.memory, callback_page, GEM_GUEST_PAGE_SIZE,
+                                  GEM_PAGE_EXECUTE_READWRITE,
+                                  &callback_old_protection) == GEM_MEMORY_OK);
+        const auto reject_malformed_callback = [&](const std::array<std::uint8_t, 4> &patch) {
+            assert(gem_memory_write(harness.memory, callback.resolved_va, patch.data(),
+                                    patch.size()) == GEM_MEMORY_OK);
+            auto malformed_context = failed_initial;
+            gem_hybrid_roundtrip_stats malformed_stats{};
+            assert(gem_hybrid_runtime_run_integer_callback_resume(
+                       runtime, &malformed_context, callback.resolved_va, resume, config.max_budget,
+                       &malformed_stats) == GEM_STOP_INVARIANT_VIOLATION);
+            auto malformed_expected = failed_initial;
+            malformed_expected.stop_reason = GEM_STOP_INVARIANT_VIOLATION;
+            assert(std::memcmp(&malformed_context, &malformed_expected,
+                               sizeof(malformed_context)) == 0);
+            assert(malformed_stats.frame_pushes == 1U && malformed_stats.frame_pops == 1U &&
+                   malformed_stats.final_frame_depth == 0U);
+            assert_stop(runtime, GEM_STOP_INVARIANT_VIOLATION, GEM_HYBRID_STOP_SOURCE_BROKER);
+            assert(gem_memory_write(harness.memory, callback.resolved_va,
+                                    callback_first_instruction.data(),
+                                    callback_first_instruction.size()) == GEM_MEMORY_OK);
+            malformed_context = failed_initial;
+            assert(gem_hybrid_runtime_run_integer_callback_resume(
+                       runtime, &malformed_context, callback.resolved_va, resume, config.max_budget,
+                       nullptr) == GEM_STOP_ARCH_TRANSITION);
+        };
+        reject_malformed_callback({{0xFF, 0x43, 0x00, 0xD1}}); /* sub sp, sp, #16 */
+        reject_malformed_callback({{0x9F, 0x80, 0x1F, 0xF8}}); /* stur xzr, [x4, #-8] */
+        assert(gem_memory_protect(harness.memory, callback_page, GEM_GUEST_PAGE_SIZE,
+                                  callback_old_protection, nullptr) == GEM_MEMORY_OK);
         gem_hybrid_runtime_destroy(runtime);
     }
 

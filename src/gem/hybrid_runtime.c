@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "metalsharp/gem/hybrid_runtime.h"
 
+#include "hybrid_runtime_internal.h"
 #include "memory_internal.h"
 
 #include <stdlib.h>
@@ -58,6 +59,18 @@ struct gem_hybrid_runtime {
     uint64_t expected_x64_target;
     uint64_t expected_nested_x64_target;
 };
+
+bool gem_hybrid_frame_contract_validate(const struct gem_hybrid_frame_contract *contract) {
+    return contract != NULL && contract->active && contract->depth != 0U &&
+           contract->depth <= contract->maximum_depth && contract->maximum_depth == 2U &&
+           contract->expected_cookie != 0U &&
+           contract->observed_cookie == contract->expected_cookie &&
+           contract->observed_return_pc == contract->expected_return_pc &&
+           contract->observed_sp == contract->expected_sp &&
+           contract->observed_original_x64_sp == contract->expected_original_x64_sp &&
+           (!contract->require_record ||
+            (contract->record_readable && contract->observed_record == contract->expected_record));
+}
 
 static bool stack_record_supported(struct gem_memory *memory, uint64_t address) {
     struct gem_memory_transaction *transaction;
@@ -169,24 +182,41 @@ static enum gem_arm64ec_boundary_action hybrid_boundary(void *opaque, uint64_t p
          runtime->stage == HYBRID_STAGE_CALLBACK_ARM_ENTRY) &&
         pc == runtime->config.dispatch_ret_helper) {
         const bool callback = runtime->stage == HYBRID_STAGE_CALLBACK_ARM_ENTRY;
+        const bool require_record =
+            callback && runtime->frame.operation == HYBRID_OPERATION_CALLBACK_RESUME;
+        struct gem_hybrid_frame_contract contract;
+        bool operation_valid;
+        memset(&contract, 0, sizeof(contract));
+        if (require_record)
+            contract.record_readable =
+                gem_memory_read(runtime->memory, runtime->frame.callback_record_address,
+                                &callback_record, sizeof(callback_record)) == GEM_MEMORY_OK;
+        contract.expected_cookie = runtime->frame.cookie;
+        contract.observed_cookie = context->transition_cookie;
+        contract.expected_return_pc =
+            callback ? runtime->frame.callback_resume_pc : runtime->frame.x64_return;
+        contract.observed_return_pc = context->x[30];
+        contract.expected_sp =
+            callback ? runtime->frame.callback_arm_entry_sp : runtime->frame.arm_entry_sp;
+        contract.observed_sp = context->sp;
+        contract.expected_original_x64_sp =
+            callback ? runtime->frame.callback_original_x64_sp : runtime->frame.original_x64_sp;
+        contract.observed_original_x64_sp = context->original_x64_sp;
+        contract.expected_record = runtime->frame.callback_resume_pc;
+        contract.observed_record = callback_record;
+        contract.depth = runtime->nested_frame.active ? 2U : (runtime->frame.active ? 1U : 0U);
+        contract.maximum_depth = 2U;
+        contract.active = runtime->frame.active;
+        contract.require_record = require_record;
+        operation_valid = callback
+                              ? (runtime->frame.operation == HYBRID_OPERATION_CALLBACK_RESUME ||
+                                 runtime->frame.operation == HYBRID_OPERATION_NESTED)
+                              : runtime->frame.operation == HYBRID_OPERATION_ROUNDTRIP_RETURN;
         *out_kind = GEM_ARM64EC_BOUNDARY_DISPATCH_RETURN;
-        if (!runtime->frame.active || context->transition_cookie != runtime->frame.cookie ||
-            context->x[30] !=
-                (callback ? runtime->frame.callback_resume_pc : runtime->frame.x64_return) ||
-            context->sp !=
-                (callback ? runtime->frame.callback_arm_entry_sp : runtime->frame.arm_entry_sp) ||
-            context->original_x64_sp != (callback ? runtime->frame.callback_original_x64_sp
-                                                  : runtime->frame.original_x64_sp) ||
-            (callback ? (runtime->frame.operation != HYBRID_OPERATION_CALLBACK_RESUME &&
-                         runtime->frame.operation != HYBRID_OPERATION_NESTED)
-                      : runtime->frame.operation != HYBRID_OPERATION_ROUNDTRIP_RETURN) ||
-            /* The non-leaf nested callback's linked ARM64EC prologue reuses
-             * the x64 CALL slot while preserving the resume PC in x30. The
-             * leaf callback contract instead retains and checks that slot. */
-            (callback && runtime->frame.operation == HYBRID_OPERATION_CALLBACK_RESUME &&
-             (gem_memory_read(runtime->memory, runtime->frame.callback_record_address,
-                              &callback_record, sizeof(callback_record)) != GEM_MEMORY_OK ||
-              callback_record != runtime->frame.callback_resume_pc)) ||
+        /* The non-leaf nested callback's linked ARM64EC prologue reuses the
+         * x64 CALL slot while preserving the resume PC in x30. The leaf
+         * callback contract instead retains and checks that slot. */
+        if (!operation_valid || !gem_hybrid_frame_contract_validate(&contract) ||
             runtime->stats.dispatch_ret_boundaries != 0U)
             return GEM_ARM64EC_BOUNDARY_FAIL;
         ++runtime->stats.dispatch_ret_boundaries;
@@ -899,8 +929,11 @@ gem_hybrid_runtime_run_integer_nested(struct gem_hybrid_runtime *runtime,
             goto Budget;
         pre_step_sp = context->sp;
         reason = gem_x64_runtime_run(runtime->x64, context, 1U);
-        if (!capture_x64_stop(runtime) || runtime->last_stop.reason != reason ||
-            runtime->last_stop.x64.instructions_retired != 1U)
+        if (!capture_x64_stop(runtime) || runtime->last_stop.reason != reason)
+            goto Invariant;
+        if (reason != GEM_STOP_BUDGET_EXPIRED && reason != GEM_STOP_HOST_RETURN)
+            goto Failure;
+        if (runtime->last_stop.x64.instructions_retired != 1U)
             goto Invariant;
         ++runtime->stats.x64_instructions_retired;
         --remaining;
@@ -989,7 +1022,11 @@ gem_hybrid_runtime_run_integer_nested(struct gem_hybrid_runtime *runtime,
             target.kind != GEM_ARM64EC_TARGET_X64_BOUNDARY || target.resolved_va != context->pc)
             goto Invariant;
         reason = gem_x64_runtime_run(runtime->x64, context, 1U);
-        if (!capture_x64_stop(runtime) || runtime->last_stop.x64.instructions_retired != 1U)
+        if (!capture_x64_stop(runtime) || runtime->last_stop.reason != reason)
+            goto Invariant;
+        if (reason != GEM_STOP_BUDGET_EXPIRED && reason != GEM_STOP_HOST_RETURN)
+            goto Failure;
+        if (runtime->last_stop.x64.instructions_retired != 1U)
             goto Invariant;
         ++runtime->stats.x64_instructions_retired;
         --remaining;
@@ -1046,7 +1083,11 @@ gem_hybrid_runtime_run_integer_nested(struct gem_hybrid_runtime *runtime,
             target.kind != GEM_ARM64EC_TARGET_X64_BOUNDARY || target.resolved_va != context->pc)
             goto Invariant;
         reason = gem_x64_runtime_run(runtime->x64, context, 1U);
-        if (!capture_x64_stop(runtime) || runtime->last_stop.x64.instructions_retired != 1U)
+        if (!capture_x64_stop(runtime) || runtime->last_stop.reason != reason)
+            goto Invariant;
+        if (reason != GEM_STOP_BUDGET_EXPIRED && reason != GEM_STOP_HOST_RETURN)
+            goto Failure;
+        if (runtime->last_stop.x64.instructions_retired != 1U)
             goto Invariant;
         ++runtime->stats.x64_instructions_retired;
         --remaining;
