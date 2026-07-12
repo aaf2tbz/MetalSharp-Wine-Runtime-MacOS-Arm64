@@ -6,11 +6,14 @@
 
 #include <array>
 #include <cassert>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <iomanip>
 #include <map>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -158,6 +161,194 @@ gem_thread_context initial_context(std::uint64_t caller) {
     }
     return context;
 }
+/* Authentic ARM64X first-boundary transitions captured against the validated
+ * issue14-5 evidence build. The expected stop RVA per entry prevents the
+ * evidence from drifting across rebuilds; any future deviation fails the probe
+ * closed. */
+struct PhaseBPath {
+    const char *entry_name;
+    std::uint32_t expected_stop_rva;
+};
+constexpr std::array<PhaseBPath, 4> kPhaseBPaths = {{
+    {"direct", UINT32_C(0x4080)},
+    {"callbackResume", UINT32_C(0x4020)},
+    {"tailTransfer", UINT32_C(0x4090)},
+    {"boundedNested", UINT32_C(0x4060)},
+}};
+constexpr std::uint64_t kPhaseBLoadedBase = UINT64_C(0x180000000);
+constexpr std::uint64_t kPhaseBExpectedRetired = UINT64_C(17);
+
+const char *arm64ec_target_kind_label(enum gem_arm64ec_target_kind kind) {
+    switch (kind) {
+    case GEM_ARM64EC_TARGET_ARM64:
+        return "arm64";
+    case GEM_ARM64EC_TARGET_ARM64EC:
+        return "arm64ec";
+    case GEM_ARM64EC_TARGET_X64_BOUNDARY:
+        return "x64-boundary";
+    }
+    return "invalid";
+}
+
+std::string hex_u64(std::uint64_t value, std::size_t width = 16) {
+    std::ostringstream os;
+    os << "0x" << std::uppercase << std::hex << std::setw(static_cast<int>(width))
+       << std::setfill('0') << value;
+    return os.str();
+}
+
+std::string hex_u64_quoted(std::uint64_t value, std::size_t width = 16) {
+    std::ostringstream os;
+    os << '"' << "0x" << std::uppercase << std::hex << std::setw(static_cast<int>(width))
+       << std::setfill('0') << value << '"';
+    return os.str();
+}
+
+std::string dec_u64(std::uint64_t value) {
+    std::ostringstream os;
+    os << std::dec << value;
+    return os.str();
+}
+
+enum gem_arm64ec_boundary_action trace_boundary(void *, std::uint64_t pc, gem_thread_context *,
+                                                gem_arm64ec_boundary_kind *kind) {
+    if (pc == kChecker)
+        *kind = GEM_ARM64EC_BOUNDARY_CHECK_ICALL;
+    else if (pc == kDispatchCall)
+        *kind = GEM_ARM64EC_BOUNDARY_DISPATCH_CALL;
+    else if (pc == kDispatchRet)
+        *kind = GEM_ARM64EC_BOUNDARY_DISPATCH_RETURN;
+    else
+        return GEM_ARM64EC_BOUNDARY_NOT_HANDLED;
+    return GEM_ARM64EC_BOUNDARY_STOP;
+}
+
+std::uint64_t fnv1a(const std::uint8_t *data, std::size_t size) {
+    std::uint64_t hash = UINT64_C(14695981039346656037);
+    for (std::size_t i = 0; i < size; ++i) {
+        hash ^= data[i];
+        hash *= UINT64_C(1099511628211);
+    }
+    return hash;
+}
+
+void write_phase_b_trace(const char *path, Harness &harness,
+                         const std::map<std::string, std::uint32_t> &entries,
+                         const gem_pe_arm64x_image *metadata) {
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    assert(out);
+    out << "{\n  \"schema\":\"mswr.phase-b.execution-evidence.v1\",\n  \"paths\":[\n";
+    /* Hash the entire reserved guest stack region (a single fixed checked range)
+     * rather than a window relative to context.sp, which may legitimately move
+     * across runs and would otherwise sample different pages. */
+    std::vector<std::uint8_t> stack_before(kStackSize);
+    std::vector<std::uint8_t> stack_after(kStackSize);
+    for (std::size_t i = 0; i < kPhaseBPaths.size(); ++i) {
+        const auto *entry_name = kPhaseBPaths[i].entry_name;
+        const auto expected_stop_rva = kPhaseBPaths[i].expected_stop_rva;
+        const auto expected_stop_va = kPhaseBLoadedBase + expected_stop_rva;
+
+        gem_arm64ec_target_result target{};
+        const auto requested_va = kPhaseBLoadedBase + entries.at(entry_name);
+        assert(gem_arm64ec_target_resolve(harness.map, requested_va, &target) ==
+               GEM_ARM64EC_TARGET_OK);
+        /* Preserve requested and resolved classifications distinctly so a future
+         * misclassification of either side fails loudly rather than silently
+         * passing through the other. */
+        gem_pe_arm64x_rva_info requested_info{};
+        gem_pe_arm64x_rva_info resolved_info{};
+        assert(gem_pe_arm64x_classify_rva(metadata, target.requested_rva, &requested_info) ==
+               GEM_PE_OK);
+        assert(gem_pe_arm64x_classify_rva(metadata, target.resolved_rva, &resolved_info) ==
+               GEM_PE_OK);
+        assert(target.kind == GEM_ARM64EC_TARGET_ARM64EC);
+        assert(arm64ec_target_kind_label(target.kind) ==
+               std::string(gem_pe_rva_class_name(resolved_info.classification)));
+        const auto resolved_va = target.resolved_va;
+
+        gem_arm64ec_runtime_config config{};
+        config.host_return_sentinel = kHostReturn;
+        config.max_budget = 10000U;
+        auto *runtime = gem_arm64ec_runtime_create(harness.memory, &config);
+        assert(runtime && gem_arm64ec_runtime_attach_arm64x(runtime, metadata, kPhaseBLoadedBase));
+        assert(gem_arm64ec_runtime_set_boundary_broker(runtime, trace_boundary, nullptr));
+        auto context = initial_context(resolved_va);
+        const auto initial_sp = context.sp;
+        assert(gem_memory_read(harness.memory, kStackBase, stack_before.data(), kStackSize) ==
+               GEM_MEMORY_OK);
+        const auto reason = gem_arm64ec_runtime_run(runtime, &context, 10000U);
+        gem_arm64ec_stop_info stop{};
+        assert(gem_arm64ec_runtime_last_stop_info(runtime, &stop));
+        assert(stop.reason == reason && context.x[18] == context.teb &&
+               gem_context_is_valid(&context));
+        const auto final_sp = context.sp;
+        assert(gem_memory_read(harness.memory, kStackBase, stack_after.data(), kStackSize) ==
+               GEM_MEMORY_OK);
+
+        /* Drift-detecting assertions against the authentic evidence. Each first
+         * ARM64X architecture transition must land at the recorded x64 PC,
+         * retire exactly 17 instructions, and the broker must stop before the
+         * engine commits any x64 fetch. */
+        assert(reason == GEM_STOP_ARCH_TRANSITION);
+        const auto stop_va = context.pc;
+        const auto stop_rva = static_cast<std::uint32_t>(stop_va - kPhaseBLoadedBase);
+        gem_pe_arm64x_rva_info stop_info{};
+        assert(gem_pe_arm64x_classify_rva(metadata, stop_rva, &stop_info) == GEM_PE_OK);
+        assert(stop_info.classification == GEM_PE_RVA_X64);
+        assert(stop_va == expected_stop_va);
+        assert(stop_rva == expected_stop_rva);
+        assert(stop.instructions_retired == kPhaseBExpectedRetired);
+
+        /* Deterministic, allocation-free-of-fixed-sizes JSON via std::ostringstream.
+         * Field order is fixed; numeric bases and widths are fixed. */
+        std::ostringstream os;
+        os << "    {\"path\":\"" << entry_name << '"';
+        os << ",\"requested\":" << hex_u64_quoted(requested_va);
+        os << ",\"requestedClassification\":\""
+           << gem_pe_rva_class_name(requested_info.classification) << '"';
+        os << ",\"resolved\":" << hex_u64_quoted(resolved_va);
+        os << ",\"resolvedClassification\":\""
+           << gem_pe_rva_class_name(resolved_info.classification) << '"';
+        os << ",\"stop\":" << hex_u64_quoted(stop_va);
+        os << ",\"stopRva\":\"" << hex_u64(stop_rva, 8) << '"';
+        os << ",\"stopClassification\":\"" << gem_pe_rva_class_name(stop_info.classification)
+           << '"';
+        os << ",\"expectedStop\":" << hex_u64_quoted(expected_stop_va);
+        os << ",\"expectedStopRva\":\"" << hex_u64(expected_stop_rva, 8) << '"';
+        os << ",\"reason\":\"" << gem_stop_reason_name(reason) << '"';
+        os << ",\"pc\":" << hex_u64_quoted(context.pc);
+        os << ",\"sp\":" << hex_u64_quoted(context.sp);
+        os << ",\"lr\":" << hex_u64_quoted(context.x[30]);
+        os << ",\"x0\":" << hex_u64_quoted(context.x[0]);
+        os << ",\"x8\":" << hex_u64_quoted(context.x[8]);
+        os << ",\"x9\":" << hex_u64_quoted(context.x[9]);
+        os << ",\"x10\":" << hex_u64_quoted(context.x[10]);
+        os << ",\"x11\":" << hex_u64_quoted(context.x[11]);
+        os << ",\"x18\":" << hex_u64_quoted(context.x[18]);
+        os << ",\"teb\":" << hex_u64_quoted(context.teb);
+        os << ",\"retired\":" << dec_u64(stop.instructions_retired);
+        os << ",\"faultAddress\":" << hex_u64_quoted(stop.fault_address);
+        os << ",\"access\":" << static_cast<unsigned>(stop.access);
+        os << ",\"memoryError\":" << stop.memory_error;
+        os << ",\"engineStatus\":" << stop.engine_status;
+        os << ",\"stackBase\":" << hex_u64_quoted(kStackBase);
+        os << ",\"stackSize\":" << kStackSize;
+        os << ",\"stackHashBefore\":\"" << hex_u64(fnv1a(stack_before.data(), kStackSize)) << '"';
+        os << ",\"stackHashAfter\":\"" << hex_u64(fnv1a(stack_after.data(), kStackSize)) << '"';
+        os << ",\"initialSp\":" << hex_u64_quoted(initial_sp);
+        os << ",\"finalSp\":" << hex_u64_quoted(final_sp);
+        os << '}';
+        if (i + 1 != kPhaseBPaths.size())
+            os << ',';
+        os << '\n';
+        out << os.str();
+        assert(out.good());
+        gem_arm64ec_runtime_destroy(runtime);
+    }
+    out << "  ]\n}\n";
+    assert(out.good());
+}
+
 void assert_stop(gem_hybrid_runtime *runtime, gem_stop_reason reason,
                  gem_hybrid_stop_source source) {
     gem_hybrid_stop_info info{};
@@ -171,7 +362,7 @@ void assert_stop(gem_hybrid_runtime *runtime, gem_stop_reason reason,
 } // namespace
 
 int main(int argc, char **argv) {
-    assert(argc == 3);
+    assert(argc == 3 || argc == 4);
     const auto bytes = read_binary(argv[1]);
     const auto entries = read_map(argv[2]);
     auto harness = make_harness(bytes, entries);
@@ -349,6 +540,9 @@ int main(int argc, char **argv) {
                               GEM_STOP_INVARIANT_VIOLATION);
         gem_hybrid_runtime_destroy(runtime);
     }
+
+    if (argc == 4)
+        write_phase_b_trace(argv[3], harness, entries, metadata);
 
     std::puts("authentic ARM64EC -> Blink -> ARM64EC integer round trip passed");
     return 0;
