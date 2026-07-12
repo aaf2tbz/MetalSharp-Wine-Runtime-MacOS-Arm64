@@ -156,6 +156,8 @@ int main() {
            info.memory_error == GEM_MEMORY_NOT_RESERVED);
 
     uint32_t old = 0;
+    uint64_t guard_value = 0U;
+    assert(gem_memory_read(m, DATA, &guard_value, sizeof(guard_value)) == GEM_MEMORY_OK);
     assert(gem_memory_protect(m, DATA, 4096, GEM_PAGE_READWRITE | GEM_PAGE_GUARD, &old) ==
            GEM_MEMORY_OK);
     assert(gem_memory_write(m, CODE, loadstore, 3) == GEM_MEMORY_OK);
@@ -165,6 +167,10 @@ int main() {
     assert(gem_x64_runtime_run(r, &c, 1) == GEM_STOP_MEMORY_FAULT);
     assert(c.pc == fault_before.pc && c.x[8] == fault_before.x[8]);
     assert(gem_x64_runtime_last_stop_info(r, &info) && info.memory_error == GEM_MEMORY_GUARD_PAGE);
+    /* Windows guard protection is one-shot. CPU/data changes rolled back above,
+     * but retrying the same instruction without re-protecting must succeed. */
+    assert(gem_x64_runtime_run(r, &c, 1) == GEM_STOP_BUDGET_EXPIRED);
+    assert(c.pc == CODE + 3U && c.x[8] == guard_value);
     uint8_t store[] = {0x48, 0x89, 0x03};
     assert(gem_memory_write(m, CODE, store, sizeof(store)) == GEM_MEMORY_OK);
     const uint64_t cross = DATA + 4092;

@@ -38,6 +38,10 @@ void gem_x64_runtime_destroy(struct gem_x64_runtime *);
 enum gem_stop_reason gem_x64_runtime_run(struct gem_x64_runtime *, struct gem_thread_context *,
                                          uint64_t);
 bool gem_x64_runtime_last_stop_info(const struct gem_x64_runtime *, struct gem_x64_stop_info *);
+/* The interpreter-only backend refreshes its transient page shadow before
+ * every instruction and owns no translated-code cache, so invalidation is a
+ * documented no-op. A future cache/JIT backend must replace this contract and
+ * prove process-serialized generation plus cache maintenance before use. */
 void gem_x64_runtime_invalidate_code(struct gem_x64_runtime *, uint64_t, uint64_t);
 const char *gem_x64_runtime_engine_name(const struct gem_x64_runtime *);
 const char *gem_x64_runtime_engine_version(const struct gem_x64_runtime *);

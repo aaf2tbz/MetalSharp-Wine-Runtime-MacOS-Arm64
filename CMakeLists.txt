@@ -14,6 +14,8 @@ option(MSWR_FETCH_DYNARMIC "Fetch the pinned Dynarmic dependency when engine sup
 option(MSWR_ENABLE_X64_ENGINE "Build pinned Blink's interpreter-only GEM adapter" OFF)
 option(MSWR_X64_ENGINE_CONFORMANCE "Build x64 engine conformance tests" OFF)
 option(MSWR_BUILD_ARM64X_ISSUE11_PROBE "Build the native Windows ARM64 issue #11 probe" OFF)
+set(MSWR_ARM64X_ROUNDTRIP_ARTIFACT_DIR "" CACHE PATH
+    "Validated run-scoped Issue #14 artifact directory (opt-in)")
 # Raw ARM64EC COFF is structural research only: it is not a linked ARM64X fixture.
 option(MSWR_GENERATE_ARM64EC_THUNK_FIXTURES "Generate non-binding LLVM ARM64EC COFF research evidence" OFF)
 
@@ -62,7 +64,8 @@ add_library(metalsharp_gem STATIC
     src/gem/context_conversion.c
     src/gem/context_serialization.c
     src/gem/memory.c
-    src/gem/pe_arm64x.c)
+    src/gem/pe_arm64x.c
+    src/gem/pe_arm64x_loader.c)
 target_include_directories(metalsharp_gem PUBLIC include)
 target_compile_features(metalsharp_gem PUBLIC c_std_11)
 target_link_libraries(metalsharp_gem PUBLIC Threads::Threads)
@@ -175,6 +178,9 @@ if(MSWR_ENABLE_X64_ENGINE)
         IMPORTED_LOCATION "${blink_gem_SOURCE_DIR}/o/blink/blink.a")
     add_dependencies(blink_gem_archive blink_gem_build)
     target_sources(metalsharp_gem PRIVATE src/gem/x64_engine.c src/gem/x64_blink.c)
+    if(MSWR_ENABLE_ARM64EC_ENGINE)
+        target_sources(metalsharp_gem PRIVATE src/gem/hybrid_runtime.c)
+    endif()
     target_include_directories(metalsharp_gem PRIVATE "${blink_gem_SOURCE_DIR}")
     target_link_libraries(metalsharp_gem PRIVATE blink_gem_archive m)
 elseif(MSWR_X64_ENGINE_CONFORMANCE)
@@ -254,6 +260,27 @@ if(BUILD_TESTING)
         set_tests_properties(gem.x64_engine_conformance PROPERTIES LABELS "zero-rosetta;gem.engine")
     endif()
 
+    if(MSWR_ARM64X_ROUNDTRIP_ARTIFACT_DIR)
+        if(NOT MSWR_ENABLE_ARM64EC_ENGINE OR NOT MSWR_ENABLE_X64_ENGINE)
+            message(FATAL_ERROR "Issue #14 round-trip artifacts require both engines")
+        endif()
+        set(mswr_roundtrip_dll
+            "${MSWR_ARM64X_ROUNDTRIP_ARTIFACT_DIR}/arm64x_fixture.dll")
+        set(mswr_roundtrip_map
+            "${MSWR_ARM64X_ROUNDTRIP_ARTIFACT_DIR}/arm64ec-entry-map.txt")
+        if(NOT EXISTS "${mswr_roundtrip_dll}" OR NOT EXISTS "${mswr_roundtrip_map}")
+            message(FATAL_ERROR "Issue #14 artifact directory is missing validated inputs")
+        endif()
+        add_executable(arm64x_roundtrip_conformance tests/arm64x_roundtrip_conformance.cpp)
+        target_link_libraries(arm64x_roundtrip_conformance PRIVATE metalsharp_gem)
+        target_compile_features(arm64x_roundtrip_conformance PRIVATE cxx_std_17)
+        mswr_enable_warnings(arm64x_roundtrip_conformance)
+        add_test(NAME gem.arm64x_roundtrip COMMAND arm64x_roundtrip_conformance
+            "${mswr_roundtrip_dll}" "${mswr_roundtrip_map}")
+        set_tests_properties(gem.arm64x_roundtrip PROPERTIES
+            LABELS "zero-rosetta;gem.engine;authentic-arm64x")
+    endif()
+
     if(MSWR_ZERO_ROSETTA_AUDIT)
         add_executable(arm64ec_engine_zero_rosetta tests/arm64ec_engine_zero_rosetta.cpp)
         mswr_enable_warnings(arm64ec_engine_zero_rosetta)
@@ -272,7 +299,8 @@ if(BUILD_TESTING)
     mswr_enable_warnings(arm64ec_target_test)
     add_test(NAME gem.arm64ec_target COMMAND arm64ec_target_test)
 
-    foreach(test_name pe_arm64x_test pe_arm64x_malformed_test pe_arm64x_fuzz_test)
+    foreach(test_name pe_arm64x_test pe_arm64x_malformed_test pe_arm64x_fuzz_test
+                      pe_arm64x_loader_test)
         add_executable(${test_name} tests/${test_name}.c)
         target_link_libraries(${test_name} PRIVATE metalsharp_gem pe_arm64x_fixture)
         mswr_enable_warnings(${test_name})

@@ -254,11 +254,44 @@ definition drift; no semantics are claimed for handlers outside that manifest. A
 bounded shadow pages are refreshed while a private GEM memory transaction holds canonical memory
 stable.
 Fetch/read/write sets are validated through GEM, full-page differences are staged and atomically
-committed, and CPU state is exported only after memory succeeds. Raw x87/MM slots remain a
-sidecar, and handlers not proven independent of x87/MM fail closed before execution.
+committed, and CPU state is exported only after memory succeeds. Windows one-shot guard behavior
+is the precise architectural exception to rollback: a guard fault consumes the guard bit after the
+whole access is validated, while CPU state and all data writes remain uncommitted; retrying without
+re-protection succeeds. Raw x87/MM slots remain a sidecar. Non-x64-mapped ARM registers remain in
+the canonical context across transient x64 synchronization; GEM does not infer or pack x6, x7,
+x9-x12, x15-x17, or LR into x87 slots. Handlers not proven independent of x87/MM fail closed before
+execution.
 
-This narrow engine conformance increment does not implement or claim Phase 3 transition-broker or
-authentic hybrid-round-trip behavior, and no Milestone 5 item is marked complete. Deterministic
+The interpreter owns no decoded-code or JIT cache: its bounded page shadow is refreshed before
+each instruction. `gem_x64_runtime_invalidate_code` is therefore deliberately a no-op in this
+backend, and self-modifying-code conformance proves that the next step sees changed bytes. A future
+cached/JIT backend must replace this backend-specific contract rather than pretending this no-op
+invalidates a cache.
+
+The Issue #14 producer may hand freshly built Microsoft-linked DLLs and sanitized evidence to its
+native macOS ARM64 consumer only as a run-scoped GitHub Actions artifact. Upload and download
+actions are SHA-pinned; retention is one day; the bundle is confined to an allowlist under
+`runner.temp`; an inner exact-property manifest binds the Git commit, file sizes, and SHA-256
+hashes; and the consumer validates the service digest and every inner link before use. PDB, OBJ,
+LIB, MAP, EXE, system files, absolute/private paths, and release publication are forbidden. This is
+ephemeral CI transport, not fixture distribution or an exception allowing generated files in the
+checkout.
+
+A Phase 3 candidate now adds a checked preferred-base materializer and a one-frame integer-only
+broker. The broker recognizes only three producer-reported helper identities, uses the existing
+checker and `function_va - 4` descriptor APIs, pushes one broker-owned x64 return record, executes
+the linked x64 tail body one instruction at a time, runs the authentic entry thunk/body through
+Dynarmic, and resumes the authentic exit thunk only after its exact dispatch-ret boundary. It
+maintains one GEM memory, a generation cookie rather than a host pointer, global broker budget
+accounting, and x18/TEB checks. Any failure restores the entry CPU context and the broker-inserted
+return record, clears its cookie/frame, and leaves the runtime reusable; memory effects of already
+retired instructions and one-shot guard consumption retain their normal per-instruction semantics.
+The deliberately narrow local Windows-VM/macOS evidence path is not acceptance: ADR 0008 remains
+Proposed and no Milestone 5 checkbox changes until two clean CI
+producer builds cross the strict ephemeral handoff and pass the native macOS consumer end to end.
+Callbacks, nesting, general returns, and the broader path matrix remain Phase 4.
+
+Deterministic
 allocation-failure injection is not exposed by the pinned embedding or GEM allocator and is
 therefore explicitly unsupported in this increment; tests do not introduce nondeterministic host
 out-of-memory pressure as a substitute.
