@@ -4,3 +4,4 @@
 0004-arm64ec-avoid-x86-inline-assembly.patch
 0005-arm64x-pass-mode-to-winebuild.patch
 0006-ntdll-integrate-native-darwin-arm64-gem.patch
+0007-ntdll-execute-native-arm64-through-gem.patch

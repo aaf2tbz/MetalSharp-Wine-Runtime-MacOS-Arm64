@@ -13,4 +13,6 @@ _gem_wine_process_bind_kuser
 _gem_wine_process_invalidate_code
 _gem_wine_thread_create
 _gem_wine_thread_destroy
+_gem_wine_thread_set_native_upper_simd
+_gem_wine_thread_get_native_upper_simd
 _gem_wine_thread_run

@@ -166,6 +166,24 @@ bool gem_arm64ec_runtime_last_stop_info(const struct gem_arm64ec_runtime *runtim
     return true;
 }
 
+bool gem_arm64ec_runtime_set_native_upper_simd(struct gem_arm64ec_runtime *runtime,
+                                               const struct gem_u128 vectors[16]) {
+    if (runtime == NULL || vectors == NULL || runtime->running ||
+        runtime->config.execution_profile != GEM_ARM64EC_PROFILE_NATIVE_ARM64)
+        return false;
+    memcpy(runtime->native_upper_simd, vectors, sizeof(runtime->native_upper_simd));
+    return true;
+}
+
+bool gem_arm64ec_runtime_get_native_upper_simd(const struct gem_arm64ec_runtime *runtime,
+                                               struct gem_u128 vectors[16]) {
+    if (runtime == NULL || vectors == NULL || runtime->running ||
+        runtime->config.execution_profile != GEM_ARM64EC_PROFILE_NATIVE_ARM64)
+        return false;
+    memcpy(vectors, runtime->native_upper_simd, sizeof(runtime->native_upper_simd));
+    return true;
+}
+
 bool gem_arm64ec_runtime_set_boundary_broker(struct gem_arm64ec_runtime *runtime,
                                              gem_arm64ec_boundary_fn broker, void *opaque) {
     if (runtime == NULL || runtime->running)

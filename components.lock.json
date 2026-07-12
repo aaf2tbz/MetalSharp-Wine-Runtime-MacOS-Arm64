@@ -11,6 +11,7 @@
     "homebrew": {
       "formulas": {
         "bison": "3.8.2",
+        "freetype": "2.14.3",
         "mesa": "26.1.4",
         "sdl2-compat": "2.32.70",
         "sdl3": "3.4.12",
@@ -56,6 +57,10 @@
         {
           "path": "third_party/patches/wine/0006-ntdll-integrate-native-darwin-arm64-gem.patch",
           "sha256": "48c120dc1fdf6295a823261f1a13a88f8c2a61c170ad2605f34d402f617d8e18"
+        },
+        {
+          "path": "third_party/patches/wine/0007-ntdll-execute-native-arm64-through-gem.patch",
+          "sha256": "d8c556a4731671a21aedb7e67a3ab7180fb1eb801939c971deafe56f2c788097"
         }
       ]
     },

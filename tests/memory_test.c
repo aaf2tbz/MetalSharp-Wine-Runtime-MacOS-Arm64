@@ -86,6 +86,14 @@ int main(void) {
         assert(gem_memory_read(memory, identity_address, output, 1U) == GEM_MEMORY_NOT_COMMITTED);
         assert(gem_memory_commit_identity(memory, identity_address, identity, host_page_size,
                                           GEM_PAGE_READWRITE) == GEM_MEMORY_OK);
+        assert(gem_memory_protect(memory, identity_address, host_page_size, GEM_PAGE_WRITECOPY,
+                                  NULL) == GEM_MEMORY_OK);
+        input[0] = 0x6b;
+        assert(gem_memory_write(memory, identity_address, input, 1U) == GEM_MEMORY_OK);
+        assert(((uint8_t *)identity)[0] == 0x6b);
+        ((uint8_t *)identity)[0] = 0x7c;
+        assert(gem_memory_read(memory, identity_address, output, 1U) == GEM_MEMORY_OK &&
+               output[0] == 0x7c);
         assert(gem_memory_release(memory, identity_address, host_page_size) == GEM_MEMORY_OK);
     }
     {

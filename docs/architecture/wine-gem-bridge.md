@@ -48,6 +48,12 @@ bound KUSER page. Those allocations must remain live until they are unmapped,
 rebound, or the process is destroyed. Wine may update the KUSER page directly;
 all guest accesses still use GEM's aliases and logical protections.
 
+Native Windows ARM64 has v0-v31 while the fixed ARM64EC context carries
+v0-v15. The native execution profile therefore owns a per-thread v16-v31
+sidecar. Wine synchronizes that sidecar at every callback and bounded run so
+`NtGetContextThread`, `NtSetContextThread`, continuation, and suspend/resume do
+not lose upper SIMD state without changing the 720-byte ABI.
+
 Wine reserves ranges in GEM before publishing committed identity backing.
 Commit, decommit, partial unmap, full release, protection changes, guard and
 WRITECOPY state, and executable invalidation are synchronized through the
@@ -99,6 +105,13 @@ closed as invariant violations rather than reaching Wine as extensible events.
 Callbacks run while that thread's non-recursive run lock is held. A callback
 must not wait for another operation that requires the same thread to finish.
 Re-entry fails with `GEM_WINE_CONFLICT`.
+
+On native ARM64 Wine, syscall and Unix-call trampolines are guest `svc`
+instructions. `KeUserModeCallback` does not invoke the PE callback dispatcher
+as a Darwin function pointer and does not nest the macOS JIT exception handler.
+It publishes a checked callback PC and stack into the current Wine syscall
+frame; `NtCallbackReturn` restores the saved guest continuation before GEM
+resumes. Callback state is per thread and supports nested Windows callbacks.
 
 ## Run publication
 

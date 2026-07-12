@@ -46,6 +46,15 @@ is not a release input.
    - synchronizes reserve, identity commit, decommit, partial unmap, release,
      protection, high KUSER backing, executable invalidation, and teardown;
    - adds an opt-in pre-guest lifecycle probe for staged acceptance.
+7. `0007-ntdll-execute-native-arm64-through-gem.patch`
+   - replaces Darwin ARM64's direct PE thread entry with the checked,
+     instruction-budgeted `gem_wine_thread_run()` loop;
+   - converts Wine syscall frames to and from canonical GEM state while
+     preserving x18/TEB and the native-only v16-v31 sidecar;
+   - dispatches exact syscall and registered Unix-call stops, converts checked
+     faults and BRK stops to Windows exceptions, and handles bounded suspend
+     and termination safe points;
+   - fails closed for unknown stops instead of invoking a guest PC natively.
 
 ## Current evidence and limitation
 
@@ -57,9 +66,8 @@ A clean build carrying this queue proceeds through `virtual_init`, high KUSER
 mapping, TEB/stack allocation, PE `ntdll.dll` mapping, and API-set loading
 without the re-exec `SIGKILL`. Its bounded opt-in probe exercises Wine's real
 allocation, protection, instruction-cache flush, guard, decommit, recommit,
-release, thread teardown, and process teardown paths, then exits before guest
-entry. Native guest execution remains Issue #23 scope; this is not a passing
-`wineboot` result.
+release, thread teardown, and process teardown paths. Normal Darwin ARM64
+startup then enters PE `LdrInitializeThunk` only through GEM.
 
 Local build trees and prefixes are not release inputs. Release acceptance still
 requires bounded `wineboot`, command, hybrid, sanitizer, reproducibility, and

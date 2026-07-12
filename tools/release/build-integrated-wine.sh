@@ -61,7 +61,7 @@ if [[ -z "$brew_prefix" ]] && command -v brew >/dev/null; then brew_prefix=$(bre
     echo "Homebrew prefix is required for the pinned native dependency set" >&2; exit 1;
 }
 brew_opt="$brew_prefix/opt"
-for required in bison vulkan-headers vulkan-loader mesa sdl2-compat sdl3; do
+for required in bison freetype vulkan-headers vulkan-loader mesa sdl2-compat sdl3; do
     [[ -d "$brew_opt/$required" ]] || { echo "missing Homebrew dependency: $required" >&2; exit 1; }
     expected=$(python3 - "$lock" "$required" <<'PY'
 import json, sys
@@ -96,11 +96,12 @@ PY
 }
 
 pkg_config_path=()
-for prefix in "$brew_opt/vulkan-headers" "$brew_opt/vulkan-loader" "$brew_opt/mesa" "$brew_opt/sdl2-compat" "$brew_opt/sdl3"; do
+for prefix in "$brew_opt/freetype" "$brew_opt/vulkan-headers" "$brew_opt/vulkan-loader" "$brew_opt/mesa" "$brew_opt/sdl2-compat" "$brew_opt/sdl3"; do
     [[ -d "$prefix/lib/pkgconfig" ]] && pkg_config_path+=("$prefix/lib/pkgconfig")
 done
 export PKG_CONFIG_PATH=$(IFS=:; echo "${pkg_config_path[*]}")
 pkg-config --exists vulkan || { echo "pkg-config cannot resolve Vulkan" >&2; exit 1; }
+pkg-config --exists freetype2 || { echo "pkg-config cannot resolve FreeType" >&2; exit 1; }
 pkg-config --exists egl || { echo "pkg-config cannot resolve EGL" >&2; exit 1; }
 pkg-config --exists sdl2 || { echo "pkg-config cannot resolve SDL2" >&2; exit 1; }
 pkg-config --exists sdl3 || { echo "pkg-config cannot resolve SDL3" >&2; exit 1; }
@@ -186,6 +187,20 @@ configure=("$source_dir/configure" "--host=aarch64-apple-darwin"
     make install 2>&1 | tee "$work/install.log"
 )
 cmake --install "$gem_build" --prefix "$prefix" --component metalsharp-gem-wine
+runtime_dir="$prefix/lib/wine/aarch64-unix"
+install -m 755 "$deps_root/vulkan/libvulkan.dylib" "$runtime_dir/libvulkan.1.dylib"
+ln -sfn libvulkan.1.dylib "$runtime_dir/libvulkan.dylib"
+install -m 755 "$deps_root/moltenvk/libMoltenVK.dylib" "$runtime_dir/libMoltenVK.dylib"
+install -m 755 "$brew_opt/mesa/lib/libEGL.1.dylib" "$runtime_dir/libEGL.1.dylib"
+ln -sfn libEGL.1.dylib "$runtime_dir/libEGL.dylib"
+install -m 755 "$brew_opt/freetype/lib/libfreetype.6.dylib" "$runtime_dir/libfreetype.6.dylib"
+ln -sfn libfreetype.6.dylib "$runtime_dir/libfreetype.dylib"
+install -m 755 "$brew_opt/sdl2-compat/lib/libSDL2-2.0.0.dylib" \
+    "$runtime_dir/libSDL2-2.0.0.dylib"
+ln -sfn libSDL2-2.0.0.dylib "$runtime_dir/libSDL2-2.0.dylib"
+ln -sfn libSDL2-2.0.0.dylib "$runtime_dir/libSDL2.dylib"
+install -m 755 "$brew_opt/sdl3/lib/libSDL3.0.dylib" "$runtime_dir/libSDL3.0.dylib"
+ln -sfn libSDL3.0.dylib "$runtime_dir/libSDL3.dylib"
 ntdll="$prefix/lib/wine/aarch64-unix/ntdll.so"
 [[ -f "$ntdll" ]] || { echo "staged native ntdll.so is missing" >&2; exit 1; }
 otool -L "$ntdll" | grep -F '@rpath/libmetalsharp-gem-wine.0.dylib' >/dev/null || {

@@ -110,6 +110,15 @@ enum gem_stop_reason gem_arm64ec_runtime_run(struct gem_arm64ec_runtime *runtime
 bool gem_arm64ec_runtime_last_stop_info(const struct gem_arm64ec_runtime *runtime,
                                         struct gem_arm64ec_stop_info *out_info);
 
+/* Native Windows ARM64 has 32 architectural SIMD registers while the fixed
+ * ARM64EC context ABI carries v0-v15.  The native profile keeps v16-v31 in a
+ * runtime-owned sidecar so bounded stops and Wine callbacks do not lose
+ * state without changing the 720-byte public context. */
+bool gem_arm64ec_runtime_set_native_upper_simd(struct gem_arm64ec_runtime *runtime,
+                                               const struct gem_u128 vectors[16]);
+bool gem_arm64ec_runtime_get_native_upper_simd(const struct gem_arm64ec_runtime *runtime,
+                                               struct gem_u128 vectors[16]);
+
 bool gem_arm64ec_runtime_set_boundary_broker(struct gem_arm64ec_runtime *runtime,
                                              gem_arm64ec_boundary_fn broker, void *opaque);
 uint64_t gem_arm64ec_runtime_transition_count(const struct gem_arm64ec_runtime *runtime);

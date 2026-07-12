@@ -467,8 +467,10 @@ static enum gem_memory_error access_memory_locked(struct gem_memory *m, uint64_t
             return GEM_MEMORY_NO_MEMORY;
         }
         for (i = 0; i < pages; i++)
-            if ((ps[i]->protection & ~(uint32_t)GEM_PAGE_GUARD) == GEM_PAGE_WRITECOPY ||
-                (ps[i]->protection & ~(uint32_t)GEM_PAGE_GUARD) == GEM_PAGE_EXECUTE_WRITECOPY) {
+            if (((ps[i]->protection & ~(uint32_t)GEM_PAGE_GUARD) == GEM_PAGE_WRITECOPY ||
+                 (ps[i]->protection & ~(uint32_t)GEM_PAGE_GUARD) ==
+                     GEM_PAGE_EXECUTE_WRITECOPY) &&
+                !ps[i]->backing->external) {
                 if (!(copies[i] = new_backing(NULL, false))) {
                     while (i)
                         drop(copies[--i]);
@@ -490,7 +492,15 @@ static enum gem_memory_error access_memory_locked(struct gem_memory *m, uint64_t
                     (ps[i]->protection & ~(uint32_t)GEM_PAGE_GUARD) == GEM_PAGE_WRITECOPY
                         ? GEM_PAGE_READWRITE
                         : GEM_PAGE_EXECUTE_READWRITE;
-            }
+            } else if (ps[i]->backing->external &&
+                       ((ps[i]->protection & ~(uint32_t)GEM_PAGE_GUARD) ==
+                            GEM_PAGE_WRITECOPY ||
+                        (ps[i]->protection & ~(uint32_t)GEM_PAGE_GUARD) ==
+                            GEM_PAGE_EXECUTE_WRITECOPY))
+                ps[i]->protection =
+                    (ps[i]->protection & ~(uint32_t)GEM_PAGE_GUARD) == GEM_PAGE_WRITECOPY
+                        ? GEM_PAGE_READWRITE
+                        : GEM_PAGE_EXECUTE_READWRITE;
     }
     done = 0;
     for (i = 0; i < pages; i++) {

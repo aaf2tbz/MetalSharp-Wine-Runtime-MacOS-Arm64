@@ -26,6 +26,7 @@ extern "C" {
 #define GEM_WINE_THREAD_CONFIG_VERSION UINT32_C(1)
 #define GEM_WINE_BOUNDARY_ABI_VERSION UINT32_C(1)
 #define GEM_WINE_RUN_RESULT_VERSION UINT32_C(1)
+#define GEM_WINE_NATIVE_UNIX_CALL_SVC UINT32_C(0x5749)
 #define GEM_WINE_GUEST_PAGE_SIZE UINT64_C(4096)
 #define GEM_WINE_KUSER_SHARED_DATA_ADDRESS UINT64_C(0x7ffe0000)
 #define GEM_WINE_KUSER_CANONICAL_ADDRESS UINT64_C(0x1007ffe0000)
@@ -235,6 +236,12 @@ gem_wine_thread_create(struct gem_wine_process *process,
                        const struct gem_wine_thread_config *config,
                        struct gem_wine_thread **out_thread);
 GEM_WINE_API enum gem_wine_status gem_wine_thread_destroy(struct gem_wine_thread *thread);
+GEM_WINE_API enum gem_wine_status
+gem_wine_thread_set_native_upper_simd(struct gem_wine_thread *thread,
+                                      const struct gem_u128 vectors[16]);
+GEM_WINE_API enum gem_wine_status
+gem_wine_thread_get_native_upper_simd(struct gem_wine_thread *thread,
+                                      struct gem_u128 vectors[16]);
 /* The input is copied before execution. Callback responses are proposals that
  * are validated in full before replacing GEM's canonical context. `out_context`
  * and `result` are published only after the run reaches a bounded stop. */

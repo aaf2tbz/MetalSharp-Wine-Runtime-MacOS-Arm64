@@ -324,12 +324,40 @@ enum gem_wine_status gem_wine_thread_destroy(struct gem_wine_thread *thread) {
     return GEM_WINE_OK;
 }
 
+enum gem_wine_status
+gem_wine_thread_set_native_upper_simd(struct gem_wine_thread *thread,
+                                      const struct gem_u128 vectors[16]) {
+    bool accepted;
+    if (thread == NULL || vectors == NULL)
+        return GEM_WINE_INVALID_ARGUMENT;
+    if (pthread_mutex_lock(&thread->runtime_lock) != 0)
+        return GEM_WINE_ENGINE_ERROR;
+    accepted = gem_arm64ec_runtime_set_native_upper_simd(thread->runtime, vectors);
+    (void)pthread_mutex_unlock(&thread->runtime_lock);
+    return accepted ? GEM_WINE_OK : GEM_WINE_CONFLICT;
+}
+
+enum gem_wine_status
+gem_wine_thread_get_native_upper_simd(struct gem_wine_thread *thread,
+                                      struct gem_u128 vectors[16]) {
+    bool accepted;
+    if (thread == NULL || vectors == NULL)
+        return GEM_WINE_INVALID_ARGUMENT;
+    if (pthread_mutex_lock(&thread->runtime_lock) != 0)
+        return GEM_WINE_ENGINE_ERROR;
+    accepted = gem_arm64ec_runtime_get_native_upper_simd(thread->runtime, vectors);
+    (void)pthread_mutex_unlock(&thread->runtime_lock);
+    return accepted ? GEM_WINE_OK : GEM_WINE_CONFLICT;
+}
+
 static enum gem_wine_boundary_event classify_event(const struct gem_wine_process *process,
                                                    enum gem_stop_reason reason,
                                                    const struct gem_thread_context *context,
                                                    const struct gem_arm64ec_stop_info *stop) {
     switch (reason) {
     case GEM_STOP_SYSCALL:
+        if (stop->engine_status == GEM_WINE_NATIVE_UNIX_CALL_SVC)
+            return GEM_WINE_EVENT_UNIX_CALL;
         return GEM_WINE_EVENT_SYSCALL;
     case GEM_STOP_MEMORY_FAULT:
         if (process->config.unix_call_dispatcher != 0U &&
@@ -439,6 +467,7 @@ enum gem_wine_status gem_wine_thread_run(struct gem_wine_thread *thread,
         {
             struct gem_wine_boundary_request request;
             struct gem_wine_boundary_response response;
+            struct gem_u128 upper_simd_before[16];
             enum gem_wine_status callback_status;
 
             memset(&request, 0, sizeof(request));
@@ -451,11 +480,18 @@ enum gem_wine_status gem_wine_thread_run(struct gem_wine_thread *thread,
             response.version = GEM_WINE_BOUNDARY_ABI_VERSION;
             response.struct_size = (uint32_t)sizeof(response);
             response.context = context;
+            if (!gem_arm64ec_runtime_get_native_upper_simd(thread->runtime, upper_simd_before)) {
+                run_result.outcome = GEM_WINE_RUN_FAILED;
+                status = GEM_WINE_ENGINE_ERROR;
+                break;
+            }
             ++run_result.boundary_callbacks;
             callback_status = thread->config.boundary(thread->config.opaque, &request, &response);
             if (callback_status != GEM_WINE_OK ||
                 response.version != GEM_WINE_BOUNDARY_ABI_VERSION ||
                 response.struct_size != sizeof(response)) {
+                (void)gem_arm64ec_runtime_set_native_upper_simd(thread->runtime,
+                                                                 upper_simd_before);
                 run_result.outcome = GEM_WINE_RUN_FAILED;
                 status = GEM_WINE_CALLBACK_ERROR;
                 break;
@@ -472,6 +508,8 @@ enum gem_wine_status gem_wine_thread_run(struct gem_wine_thread *thread,
                 ((request.event == GEM_WINE_EVENT_SYSCALL ||
                   request.event == GEM_WINE_EVENT_UNIX_CALL) &&
                  response.context.pc == request.context.pc)) {
+                (void)gem_arm64ec_runtime_set_native_upper_simd(thread->runtime,
+                                                                 upper_simd_before);
                 run_result.outcome = GEM_WINE_RUN_FAILED;
                 status = GEM_WINE_CALLBACK_ERROR;
                 break;

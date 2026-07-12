@@ -192,6 +192,8 @@ int main(void) {
     struct gem_thread_context unchanged_output;
     struct gem_wine_run_result result;
     struct gem_wine_run_result unchanged_result;
+    struct gem_u128 upper_simd[16];
+    struct gem_u128 upper_simd_output[16];
 
     atomic_init(&callback.block_enabled, 0);
     atomic_init(&callback.callback_entered, 0);
@@ -275,6 +277,14 @@ int main(void) {
     assert(thread == NULL);
     assert(gem_wine_thread_create(process, &thread_config, &thread) == GEM_WINE_OK);
     assert(thread != NULL);
+    for (churn_index = 0U; churn_index < 16U; ++churn_index) {
+        upper_simd[churn_index].lo = UINT64_C(0x1111000000000000) + churn_index;
+        upper_simd[churn_index].hi = UINT64_C(0xeeee000000000000) + churn_index;
+    }
+    assert(gem_wine_thread_set_native_upper_simd(thread, upper_simd) == GEM_WINE_OK);
+    memset(upper_simd_output, 0, sizeof(upper_simd_output));
+    assert(gem_wine_thread_get_native_upper_simd(thread, upper_simd_output) == GEM_WINE_OK);
+    assert(memcmp(upper_simd, upper_simd_output, sizeof(upper_simd)) == 0);
     assert(gem_wine_process_destroy(process) == GEM_WINE_CONFLICT);
 
     initialize_context(&input, code);
@@ -299,6 +309,8 @@ int main(void) {
     assert(callback.syscall_count == 1U && callback.unix_count == 1U);
     assert(output.pc == HOST_RETURN && output.x[0] == UINT64_C(0x99));
     assert(output.x[18] == TEST_TEB);
+    assert(gem_wine_thread_get_native_upper_simd(thread, upper_simd_output) == GEM_WINE_OK);
+    assert(memcmp(upper_simd, upper_simd_output, sizeof(upper_simd)) == 0);
 
     store_word(mapping, CODE_OFFSET, LDR_X2_X0);
     store_word(mapping, CODE_OFFSET + 4U, RET);

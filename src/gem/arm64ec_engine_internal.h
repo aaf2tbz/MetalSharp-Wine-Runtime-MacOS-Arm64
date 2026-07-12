@@ -17,6 +17,7 @@ struct gem_arm64ec_runtime {
     gem_arm64ec_boundary_fn boundary_broker;
     void *boundary_opaque;
     uint64_t transition_count;
+    struct gem_u128 native_upper_simd[16];
     bool running;
     void *backend;
 };

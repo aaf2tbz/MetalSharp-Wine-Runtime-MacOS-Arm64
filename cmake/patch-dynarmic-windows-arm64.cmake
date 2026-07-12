@@ -1,4 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
+# Apply the two local compatibility changes required by the pinned Dynarmic
+# source.  Keep each replacement fail-closed so a dependency update cannot
+# silently carry stale integration assumptions.
+#
 # Dynarmic 6.7.0's native ARM64 callback trampolines assume that a 16-byte
 # aggregate returned by a C++ member function is returned in x0/x1. MSVC's
 # Windows ARM64 ABI instead passes a result-buffer pointer in x1 and shifts the
@@ -70,18 +74,46 @@ string(FIND "${contents}" "${normal_new}" normal_new_offset)
 string(FIND "${contents}" "${wrapped_new}" wrapped_new_offset)
 if(normal_offset EQUAL -1 AND wrapped_offset EQUAL -1 AND
    NOT normal_new_offset EQUAL -1 AND NOT wrapped_new_offset EQUAL -1)
-    return()
-endif()
-if(normal_offset EQUAL -1 OR wrapped_offset EQUAL -1 OR
-   NOT normal_new_offset EQUAL -1 OR NOT wrapped_new_offset EQUAL -1)
+    set(callbacks_already_patched TRUE)
+elseif(normal_offset EQUAL -1 OR wrapped_offset EQUAL -1 OR
+       NOT normal_new_offset EQUAL -1 OR NOT wrapped_new_offset EQUAL -1)
     message(FATAL_ERROR "pinned Dynarmic ARM64 callback trampoline text changed or is partially patched")
 endif()
 
-string(REPLACE "${normal_old}" "${normal_new}" contents "${contents}")
-string(REPLACE "${wrapped_old}" "${wrapped_new}" contents "${contents}")
-string(FIND "${contents}" "${normal_old}" remaining_normal_offset)
-string(FIND "${contents}" "${wrapped_old}" remaining_wrapped_offset)
-if(NOT remaining_normal_offset EQUAL -1 OR NOT remaining_wrapped_offset EQUAL -1)
-    message(FATAL_ERROR "failed to patch all Dynarmic ARM64 Vector read trampolines")
+if(NOT callbacks_already_patched)
+    string(REPLACE "${normal_old}" "${normal_new}" contents "${contents}")
+    string(REPLACE "${wrapped_old}" "${wrapped_new}" contents "${contents}")
+    string(FIND "${contents}" "${normal_old}" remaining_normal_offset)
+    string(FIND "${contents}" "${wrapped_old}" remaining_wrapped_offset)
+    if(NOT remaining_normal_offset EQUAL -1 OR NOT remaining_wrapped_offset EQUAL -1)
+        message(FATAL_ERROR "failed to patch all Dynarmic ARM64 Vector read trampolines")
+    endif()
+    file(WRITE "${source}" "${contents}")
 endif()
-file(WRITE "${source}" "${contents}")
+
+# The macOS fastmem backend installs a task-wide Mach EXC_BAD_ACCESS port as
+# soon as an A64 JIT is created. MetalSharp's checked-memory profile does not
+# use fastmem, and issue #23 requires Wine to retain its ordinary per-thread
+# Unix signal path. Select Dynarmic's inert generic handler on Apple hosts;
+# checked guest faults continue through the explicit memory callbacks.
+set(cmake_source "${DYNARMIC_SOURCE_DIR}/src/dynarmic/CMakeLists.txt")
+file(READ "${cmake_source}" cmake_contents)
+set(macos_old [=[elseif (APPLE)
+    find_path(MACH_EXC_DEFS_DIR "mach/mach_exc.defs")
+]=])
+set(macos_new [=[elseif (APPLE)
+    message(STATUS "macOS fastmem disabled for MetalSharp checked-memory integration")
+    target_sources(dynarmic PRIVATE backend/exception_handler_generic.cpp)
+elseif (FALSE) # Upstream macOS fastmem path intentionally disabled by MetalSharp.
+    find_path(MACH_EXC_DEFS_DIR "mach/mach_exc.defs")
+]=])
+string(FIND "${cmake_contents}" "${macos_old}" macos_offset)
+string(FIND "${cmake_contents}" "${macos_new}" macos_new_offset)
+if(macos_offset EQUAL -1 AND NOT macos_new_offset EQUAL -1)
+    return()
+endif()
+if(macos_offset EQUAL -1 OR NOT macos_new_offset EQUAL -1)
+    message(FATAL_ERROR "pinned Dynarmic macOS exception-handler selection changed or is partially patched")
+endif()
+string(REPLACE "${macos_old}" "${macos_new}" cmake_contents "${cmake_contents}")
+file(WRITE "${cmake_source}" "${cmake_contents}")

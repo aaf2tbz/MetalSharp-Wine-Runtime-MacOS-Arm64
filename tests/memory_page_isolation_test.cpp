@@ -285,34 +285,31 @@ void run_single_threaded(gem_memory *mem, std::uint64_t base, std::uint8_t *host
         assert(std::memcmp(host, snapshot.data(), kIsolationBytes) == 0);
     }
 
-    // WRITECOPY detachment on an identity page: writing detaches into a private
-    // 4 KiB copy; the corresponding host slice is no longer referenced and stays
-    // unchanged.
+    // WRITECOPY on external identity storage remains host-coherent. Wine's Unix
+    // side and GEM must continue to observe the same PE image backing.
     {
         check_eq("protect p0 wc",
                  gem_memory_protect(mem, p0, kGuestPage, GEM_PAGE_WRITECOPY, nullptr),
                  GEM_MEMORY_OK);
-        const std::uint8_t before = host[0];
         val = 0x5AU;
         check_eq("writecopy write", gem_memory_write(mem, p0, &val, 1U), GEM_MEMORY_OK);
         assert(gem_memory_read(mem, p0, out, 1U) == GEM_MEMORY_OK && out[0] == val);
-        assert(host[0] == before);
+        assert(host[0] == val);
     }
 
-    // EXECUTE_WRITECOPY detachment on an execute page.
+    // EXECUTE_WRITECOPY has the same coherence rule on external storage.
     {
         check_eq("protect p2 ewc",
                  gem_memory_protect(mem, p2, kGuestPage, GEM_PAGE_EXECUTE_WRITECOPY, nullptr),
                  GEM_MEMORY_OK);
-        const std::uint8_t before = host[2 * 4096U];
         val = 0xECU;
         check_eq("ewc write", gem_memory_write(mem, p2, &val, 1U), GEM_MEMORY_OK);
         assert(gem_memory_fetch(mem, p2, out, 1U) == GEM_MEMORY_OK && out[0] == val);
-        assert(host[2 * 4096U] == before);
+        assert(host[2 * 4096U] == val);
     }
 
-    // Alias a separate region to p1 (READWRITE); changes are shared.  Then a
-    // WRITECOPY alias write detaches without mutating the source.
+    // Aliases of an external identity backing remain coherent even when the
+    // alias carries WRITECOPY protection.
     {
         const std::uint64_t alias_addr = fresh_address(mem, kGuestPage);
         check_eq("alias rw", gem_memory_alias(mem, alias_addr, p1, kGuestPage, GEM_PAGE_READWRITE),
@@ -325,11 +322,10 @@ void run_single_threaded(gem_memory *mem, std::uint64_t base, std::uint8_t *host
         check_eq("alias wcopy",
                  gem_memory_alias(mem, wcopy_addr, p1, kGuestPage, GEM_PAGE_WRITECOPY),
                  GEM_MEMORY_OK);
-        const std::uint8_t source_before = val;
         const std::uint8_t wval = 0x88U;
         check_eq("wcopy write", gem_memory_write(mem, wcopy_addr, &wval, 1U), GEM_MEMORY_OK);
         assert(gem_memory_read(mem, wcopy_addr, out, 1U) == GEM_MEMORY_OK && out[0] == wval);
-        assert(gem_memory_read(mem, p1, out, 1U) == GEM_MEMORY_OK && out[0] == source_before);
+        assert(gem_memory_read(mem, p1, out, 1U) == GEM_MEMORY_OK && out[0] == wval);
 
         check_eq("unmap wcopy", gem_memory_unmap(mem, wcopy_addr, kGuestPage), GEM_MEMORY_OK);
         check_eq("unmap alias", gem_memory_unmap(mem, alias_addr, kGuestPage), GEM_MEMORY_OK);
@@ -385,7 +381,8 @@ void run_single_threaded(gem_memory *mem, std::uint64_t base, std::uint8_t *host
                  GEM_MEMORY_OK);
         assert(gem_memory_read(mem, wcopy_addr, out, 1U) == GEM_MEMORY_OK &&
                out[0] == detached_value);
-        assert(gem_memory_read(mem, p1, out, 1U) == GEM_MEMORY_OK && out[0] == val);
+        assert(gem_memory_read(mem, p1, out, 1U) == GEM_MEMORY_OK &&
+               out[0] == detached_value);
         check_eq("guarded page write after rollback",
                  gem_memory_write(mem, p3, &detached_value, 1U), GEM_MEMORY_OK);
         check_eq("unmap rollback wcopy", gem_memory_unmap(mem, wcopy_addr, kGuestPage),
@@ -528,10 +525,9 @@ void run_concurrent_guard(gem_memory *mem, std::uint64_t guarded_page,
     assert(ok_count == kGuardWorkers - 1U);
 }
 
-// Distinct-offset write-copy writers: every write is accepted and present in the
-// detached alias; the source page remains unchanged.
-void run_concurrent_write_copy(gem_memory *mem, std::uint64_t source_page,
-                               std::uint8_t source_value) {
+// Distinct-offset write-copy writers over an external alias remain coherent
+// with the identity source page.
+void run_concurrent_write_copy(gem_memory *mem, std::uint64_t source_page) {
     const std::uint64_t alias_addr = fresh_address(mem, kGuestPage);
     check_eq("wc alias",
              gem_memory_alias(mem, alias_addr, source_page, kGuestPage, GEM_PAGE_WRITECOPY),
@@ -562,9 +558,13 @@ void run_concurrent_write_copy(gem_memory *mem, std::uint64_t source_page,
         check_eq("wc readback", gem_memory_read(mem, alias_addr + offset, &b, 1U), GEM_MEMORY_OK);
         assert(b == static_cast<std::uint8_t>(0x80U + static_cast<unsigned>(i)));
     }
-    std::uint8_t b = 0U;
-    check_eq("wc source read", gem_memory_read(mem, source_page, &b, 1U), GEM_MEMORY_OK);
-    assert(b == source_value);
+    for (unsigned int i = 0; i < kWriteCopyWorkers; ++i) {
+        const std::uint64_t offset = static_cast<std::uint64_t>(i);
+        std::uint8_t b = 0U;
+        check_eq("wc source read", gem_memory_read(mem, source_page + offset, &b, 1U),
+                 GEM_MEMORY_OK);
+        assert(b == static_cast<std::uint8_t>(0x80U + i));
+    }
 
     check_eq("wc unmap", gem_memory_unmap(mem, alias_addr, kGuestPage), GEM_MEMORY_OK);
 }
@@ -684,11 +684,9 @@ int main(void) {
 
     run_single_threaded(mem, base, host);
 
-    // The single-threaded phase permanently detaches p0/p2 via write-copy and
-    // p3 via decommit/recommit, so the original identity backings for those
-    // slices are no longer referenced.  Remap a fresh identity reservation over
-    // the same 16 KiB host allocation so every concurrent test runs over four
-    // 4 KiB slices of one identity backing, with no stale detached pages.
+    // The single-threaded phase decommits/recommits p3. Remap a fresh identity
+    // reservation over the same 16 KiB host allocation so every concurrent test
+    // starts from one complete four-slice external backing.
     check_eq("unmap identity (pre-concurrency)", gem_memory_unmap(mem, base, kIsolationBytes),
              GEM_MEMORY_OK);
     for (std::size_t i = 0; i < kIsolationBytes; ++i)
@@ -705,8 +703,7 @@ int main(void) {
     const std::uint64_t p2 = page_base(base, 2);
 
     // Seed all four identity pages deterministically through GEM.  p1 stays the
-    // write-copy source; no identity page is permanently detached by these
-    // concurrent tests (the write-copy test detaches only its separate alias).
+    // write-copy source; the external write-copy alias remains coherent.
     for (std::size_t i = 0; i < kPagesPerHost; ++i) {
         const std::uint8_t v = static_cast<std::uint8_t>(0x10U * static_cast<unsigned>(i) + 1U);
         check_eq("concurrency seed", gem_memory_write(mem, page_base(base, i), &v, 1U),
@@ -714,7 +711,7 @@ int main(void) {
     }
 
     run_concurrent_guard(mem, p2, /*sentinel_after=*/static_cast<std::uint8_t>(0x21U));
-    run_concurrent_write_copy(mem, p1, /*source_value=*/static_cast<std::uint8_t>(0x11U));
+    run_concurrent_write_copy(mem, p1);
 
     for (std::size_t i = 0; i < kPagesPerHost; ++i) {
         check_eq(

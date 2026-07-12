@@ -48,6 +48,13 @@
       "sha256": "48c120dc1fdf6295a823261f1a13a88f8c2a61c170ad2605f34d402f617d8e18",
       "authoringCommit": "4e324aef626e3845a4e3e8d67df5cbe65d47e9aa",
       "purpose": "Require and directly link the exact native GEM bridge ABI, then synchronize Wine ntdll process, thread, memory, KUSER, protection, invalidation, and teardown lifecycle."
+    },
+    {
+      "order": 7,
+      "path": "third_party/patches/wine/0007-ntdll-execute-native-arm64-through-gem.patch",
+      "sha256": "d8c556a4731671a21aedb7e67a3ab7180fb1eb801939c971deafe56f2c788097",
+      "authoringCommit": "953373784b3a6ec550d368ebcdde5326ac02a6be",
+      "purpose": "Replace Darwin ARM64 native guest entry with bounded GEM execution and explicit syscall, Unix-call, fault, exception, suspend, and termination boundaries."
     }
   ],
   "researchEvidence": {
