@@ -37,6 +37,19 @@ struct gem_hybrid_return_control {
     uint64_t expected_x64_target_va;
 };
 
+struct gem_hybrid_nested_control {
+    uint32_t version;
+    uint32_t reserved;
+    uint64_t requested_start_va;
+    uint64_t expected_resolved_start_va;
+    uint64_t outer_x64_target_va;
+    uint64_t callback_va;
+    uint64_t outer_resume_va;
+    uint64_t inner_x64_target_va;
+};
+
+#define GEM_HYBRID_NESTED_CONTROL_VERSION UINT32_C(1)
+
 enum gem_hybrid_stop_source {
     GEM_HYBRID_STOP_SOURCE_BROKER = 0,
     GEM_HYBRID_STOP_SOURCE_ARM64EC = 1,
@@ -98,6 +111,14 @@ gem_hybrid_runtime_run_integer_return(struct gem_hybrid_runtime *runtime,
 enum gem_stop_reason gem_hybrid_runtime_run_integer_callback_resume(
     struct gem_hybrid_runtime *runtime, struct gem_thread_context *context, uint64_t callback_va,
     uint64_t expected_resume_va, uint64_t budget, struct gem_hybrid_roundtrip_stats *stats);
+/* Executes the evidenced depth-2 integer path ARM64EC -> x64 -> ARM64EC ->
+ * x64 -> ARM64EC. The outer and inner broker records are bounded, checked,
+ * restored independently, and never become part of the 720-byte context ABI. */
+enum gem_stop_reason
+gem_hybrid_runtime_run_integer_nested(struct gem_hybrid_runtime *runtime,
+                                      struct gem_thread_context *context,
+                                      const struct gem_hybrid_nested_control *control,
+                                      uint64_t budget, struct gem_hybrid_roundtrip_stats *stats);
 bool gem_hybrid_runtime_last_stop_info(const struct gem_hybrid_runtime *runtime,
                                        struct gem_hybrid_stop_info *out_info);
 

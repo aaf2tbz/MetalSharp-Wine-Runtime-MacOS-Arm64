@@ -20,7 +20,8 @@ enum hybrid_stage {
 enum hybrid_operation {
     HYBRID_OPERATION_NONE = 0,
     HYBRID_OPERATION_ROUNDTRIP_RETURN,
-    HYBRID_OPERATION_CALLBACK_RESUME
+    HYBRID_OPERATION_CALLBACK_RESUME,
+    HYBRID_OPERATION_NESTED
 };
 
 struct hybrid_frame {
@@ -47,6 +48,7 @@ struct gem_hybrid_runtime {
     struct gem_x64_runtime *x64;
     struct gem_hybrid_runtime_config config;
     struct hybrid_frame frame;
+    struct hybrid_frame nested_frame;
     struct gem_hybrid_roundtrip_stats stats;
     struct gem_hybrid_stop_info last_stop;
     enum hybrid_stage stage;
@@ -54,6 +56,7 @@ struct gem_hybrid_runtime {
     bool running;
     enum gem_hybrid_return_mode return_mode;
     uint64_t expected_x64_target;
+    uint64_t expected_nested_x64_target;
 };
 
 static bool stack_record_supported(struct gem_memory *memory, uint64_t address) {
@@ -103,7 +106,7 @@ static enum gem_arm64ec_boundary_action hybrid_boundary(void *opaque, uint64_t p
                                                         struct gem_thread_context *context,
                                                         enum gem_arm64ec_boundary_kind *out_kind) {
     struct gem_hybrid_runtime *runtime = (struct gem_hybrid_runtime *)opaque;
-    uint64_t callback_record;
+    uint64_t callback_record = 0U;
     if (context->x[18] != context->teb)
         return GEM_ARM64EC_BOUNDARY_FAIL;
     if (runtime->stage == HYBRID_STAGE_ARM_TO_X64 && pc == runtime->config.checker_helper) {
@@ -127,6 +130,21 @@ static enum gem_arm64ec_boundary_action hybrid_boundary(void *opaque, uint64_t p
                  target.resolved_va != runtime->expected_x64_target))
                 return GEM_ARM64EC_BOUNDARY_FAIL;
         }
+        ++runtime->stats.checker_boundaries;
+        context->pc = context->x[30];
+        return GEM_ARM64EC_BOUNDARY_RESUME;
+    }
+    if (runtime->stage == HYBRID_STAGE_CALLBACK_ARM_ENTRY &&
+        runtime->frame.operation == HYBRID_OPERATION_NESTED &&
+        pc == runtime->config.checker_helper) {
+        struct gem_arm64ec_target_result target;
+        *out_kind = GEM_ARM64EC_BOUNDARY_CHECK_ICALL;
+        if (runtime->stats.checker_boundaries != 1U || runtime->nested_frame.active ||
+            gem_arm64ec_target_resolve(runtime->map, context->x[11], &target) !=
+                GEM_ARM64EC_TARGET_OK ||
+            target.kind != GEM_ARM64EC_TARGET_X64_BOUNDARY ||
+            target.resolved_va != runtime->expected_nested_x64_target)
+            return GEM_ARM64EC_BOUNDARY_FAIL;
         ++runtime->stats.checker_boundaries;
         context->pc = context->x[30];
         return GEM_ARM64EC_BOUNDARY_RESUME;
@@ -159,9 +177,13 @@ static enum gem_arm64ec_boundary_action hybrid_boundary(void *opaque, uint64_t p
                 (callback ? runtime->frame.callback_arm_entry_sp : runtime->frame.arm_entry_sp) ||
             context->original_x64_sp != (callback ? runtime->frame.callback_original_x64_sp
                                                   : runtime->frame.original_x64_sp) ||
-            runtime->frame.operation !=
-                (callback ? HYBRID_OPERATION_CALLBACK_RESUME : HYBRID_OPERATION_ROUNDTRIP_RETURN) ||
-            (callback &&
+            (callback ? (runtime->frame.operation != HYBRID_OPERATION_CALLBACK_RESUME &&
+                         runtime->frame.operation != HYBRID_OPERATION_NESTED)
+                      : runtime->frame.operation != HYBRID_OPERATION_ROUNDTRIP_RETURN) ||
+            /* The non-leaf nested callback's linked ARM64EC prologue reuses
+             * the x64 CALL slot while preserving the resume PC in x30. The
+             * leaf callback contract instead retains and checks that slot. */
+            (callback && runtime->frame.operation == HYBRID_OPERATION_CALLBACK_RESUME &&
              (gem_memory_read(runtime->memory, runtime->frame.callback_record_address,
                               &callback_record, sizeof(callback_record)) != GEM_MEMORY_OK ||
               callback_record != runtime->frame.callback_resume_pc)) ||
@@ -775,6 +797,337 @@ Failure:
     runtime->running = false;
     runtime->return_mode = 0;
     runtime->expected_x64_target = 0U;
+    *context = entry;
+    context->stop_reason = reason;
+    if (stats != NULL)
+        *stats = runtime->stats;
+    return reason;
+}
+
+enum gem_stop_reason
+gem_hybrid_runtime_run_integer_nested(struct gem_hybrid_runtime *runtime,
+                                      struct gem_thread_context *context,
+                                      const struct gem_hybrid_nested_control *control,
+                                      uint64_t budget, struct gem_hybrid_roundtrip_stats *stats) {
+    struct gem_thread_context entry;
+    struct gem_arm64ec_target_result start, outer, callback, resume, inner, target, thunk;
+    enum gem_stop_reason reason = GEM_STOP_INVARIANT_VIOLATION;
+    uint64_t remaining = budget;
+    uint64_t root_record_address = 0U, root_old_record = 0U;
+    uint64_t inner_record_address = 0U, inner_old_record = 0U;
+    uint64_t pre_step_sp = 0U, record = 0U;
+    bool root_record_written = false, inner_record_written = false;
+
+    if (stats != NULL)
+        memset(stats, 0, sizeof(*stats));
+    if (runtime == NULL)
+        return fail(context);
+    if (context == NULL || control == NULL ||
+        control->version != GEM_HYBRID_NESTED_CONTROL_VERSION || control->reserved != 0U ||
+        runtime->running || runtime->frame.active || runtime->nested_frame.active ||
+        !gem_context_is_valid(context) || context->isa != GEM_ISA_ARM64EC ||
+        context->pc != control->requested_start_va || context->transition_cookie != 0U ||
+        context->x[18] != context->teb || budget == 0U || budget > runtime->config.max_budget ||
+        gem_arm64ec_target_resolve(runtime->map, control->requested_start_va, &start) !=
+            GEM_ARM64EC_TARGET_OK ||
+        start.kind != GEM_ARM64EC_TARGET_ARM64EC ||
+        start.resolved_va != control->expected_resolved_start_va ||
+        gem_arm64ec_target_resolve(runtime->map, control->outer_x64_target_va, &outer) !=
+            GEM_ARM64EC_TARGET_OK ||
+        outer.kind != GEM_ARM64EC_TARGET_X64_BOUNDARY ||
+        outer.resolved_va != control->outer_x64_target_va ||
+        gem_arm64ec_target_resolve(runtime->map, control->callback_va, &callback) !=
+            GEM_ARM64EC_TARGET_OK ||
+        callback.kind != GEM_ARM64EC_TARGET_ARM64EC ||
+        callback.resolved_va != control->callback_va || control->callback_va < 4U ||
+        gem_arm64ec_target_resolve(runtime->map, control->outer_resume_va, &resume) !=
+            GEM_ARM64EC_TARGET_OK ||
+        resume.kind != GEM_ARM64EC_TARGET_X64_BOUNDARY ||
+        resume.resolved_va != control->outer_resume_va ||
+        gem_arm64ec_target_resolve(runtime->map, control->inner_x64_target_va, &inner) !=
+            GEM_ARM64EC_TARGET_OK ||
+        inner.kind != GEM_ARM64EC_TARGET_X64_BOUNDARY ||
+        inner.resolved_va != control->inner_x64_target_va || context->sp < sizeof(uint64_t) ||
+        !stack_record_supported(runtime->memory, context->sp - sizeof(uint64_t))) {
+        record_broker_stop(runtime, GEM_STOP_INVARIANT_VIOLATION);
+        return fail(context);
+    }
+
+    entry = *context;
+    memset(&runtime->stats, 0, sizeof(runtime->stats));
+    memset(&runtime->last_stop, 0, sizeof(runtime->last_stop));
+    runtime->running = true;
+    runtime->stage = HYBRID_STAGE_ARM_TO_X64;
+    runtime->return_mode = GEM_HYBRID_RETURN_NORMAL;
+    runtime->expected_x64_target = outer.resolved_va;
+    runtime->expected_nested_x64_target = inner.resolved_va;
+    context->pc = start.resolved_va;
+    context->stop_reason = GEM_STOP_NONE;
+    reason = gem_arm64ec_runtime_run(runtime->arm, context, remaining);
+    if (!consume_arm_budget(runtime, &remaining) || runtime->last_stop.reason != reason)
+        goto Invariant;
+    if (reason == GEM_STOP_BUDGET_EXPIRED)
+        goto Failure;
+    if (reason != GEM_STOP_ARCH_TRANSITION || runtime->stats.checker_boundaries != 1U ||
+        context->pc != outer.resolved_va || context->sp != entry.sp ||
+        context->x[30] != entry.x[30] || context->x[18] != entry.x[18])
+        goto Invariant;
+    if (remaining == 0U)
+        goto Budget;
+
+    runtime->generation = runtime->generation == UINT64_MAX ? 1U : runtime->generation + 1U;
+    runtime->frame.cookie = runtime->generation;
+    runtime->frame.operation = HYBRID_OPERATION_NESTED;
+    runtime->frame.active = true;
+    context->transition_cookie = runtime->frame.cookie;
+    ++runtime->stats.frame_pushes;
+    runtime->stats.maximum_frame_depth = 1U;
+    runtime->stats.final_frame_depth = 1U;
+    root_record_address = context->sp - sizeof(uint64_t);
+    if (replace_stack_record(runtime->memory, root_record_address,
+                             runtime->config.x64_return_sentinel,
+                             &root_old_record) != GEM_MEMORY_OK)
+        goto Invariant;
+    root_record_written = true;
+    context->sp = root_record_address;
+    context->pc = outer.resolved_va;
+    context->isa = GEM_ISA_X64;
+    context->stop_reason = GEM_STOP_NONE;
+
+    for (;;) {
+        if (remaining == 0U)
+            goto Budget;
+        pre_step_sp = context->sp;
+        reason = gem_x64_runtime_run(runtime->x64, context, 1U);
+        if (!capture_x64_stop(runtime) || runtime->last_stop.reason != reason ||
+            runtime->last_stop.x64.instructions_retired != 1U)
+            goto Invariant;
+        ++runtime->stats.x64_instructions_retired;
+        --remaining;
+        context->stop_reason = GEM_STOP_NONE;
+        if (gem_arm64ec_target_resolve(runtime->map, context->pc, &target) != GEM_ARM64EC_TARGET_OK)
+            goto Invariant;
+        if (target.kind == GEM_ARM64EC_TARGET_X64_BOUNDARY) {
+            if (reason != GEM_STOP_BUDGET_EXPIRED || target.resolved_va != context->pc)
+                goto Invariant;
+            continue;
+        }
+        if (reason != GEM_STOP_BUDGET_EXPIRED || target.kind != GEM_ARM64EC_TARGET_ARM64EC ||
+            target.resolved_va != callback.resolved_va || context->pc != callback.resolved_va ||
+            !gem_x64_runtime_last_instruction_was_call(runtime->x64) ||
+            pre_step_sp < sizeof(record) || context->sp != pre_step_sp - sizeof(record) ||
+            gem_memory_read(runtime->memory, context->sp, &record, sizeof(record)) !=
+                GEM_MEMORY_OK ||
+            record != resume.resolved_va)
+            goto Invariant;
+        break;
+    }
+
+    ++runtime->stats.x64_to_arm64ec_boundaries;
+    runtime->frame.callback_target = callback.resolved_va;
+    runtime->frame.callback_call_sp = pre_step_sp;
+    runtime->frame.callback_record_address = context->sp;
+    runtime->frame.callback_resume_pc = resume.resolved_va;
+    runtime->frame.callback_original_x64_sp = pre_step_sp;
+    runtime->frame.callback_arm_entry_sp = pre_step_sp & ~UINT64_C(15);
+    if (gem_arm64ec_descriptor_resolve(runtime->map, runtime->memory, callback.resolved_va - 4U,
+                                       NULL, &thunk) != GEM_ARM64EC_TARGET_OK ||
+        thunk.kind != GEM_ARM64EC_TARGET_ARM64EC)
+        goto Invariant;
+    ++runtime->stats.descriptor_resolutions;
+    context->x[30] = resume.resolved_va;
+    context->x[4] = pre_step_sp;
+    context->x[9] = callback.resolved_va;
+    context->original_x64_sp = pre_step_sp;
+    context->sp = runtime->frame.callback_arm_entry_sp;
+    context->pc = thunk.resolved_va;
+    context->isa = GEM_ISA_ARM64EC;
+    context->x[18] = context->teb;
+    context->stop_reason = GEM_STOP_NONE;
+    runtime->stage = HYBRID_STAGE_CALLBACK_ARM_ENTRY;
+    if (remaining == 0U)
+        goto Budget;
+    reason = gem_arm64ec_runtime_run(runtime->arm, context, remaining);
+    if (!consume_arm_budget(runtime, &remaining) || runtime->last_stop.reason != reason)
+        goto Invariant;
+    if (reason == GEM_STOP_BUDGET_EXPIRED)
+        goto Failure;
+    if (reason != GEM_STOP_ARCH_TRANSITION || context->pc != inner.resolved_va ||
+        runtime->stats.checker_boundaries != 2U || runtime->stats.dispatch_ret_boundaries != 0U ||
+        context->x[18] != context->teb || context->sp < sizeof(uint64_t) ||
+        !stack_record_supported(runtime->memory, context->sp - sizeof(uint64_t)))
+        goto Invariant;
+    if (remaining == 0U)
+        goto Budget;
+
+    runtime->generation = runtime->generation == UINT64_MAX ? 1U : runtime->generation + 1U;
+    runtime->nested_frame.cookie = runtime->generation;
+    runtime->nested_frame.operation = HYBRID_OPERATION_NESTED;
+    runtime->nested_frame.active = true;
+    runtime->nested_frame.arm_resume_pc = context->x[30];
+    runtime->nested_frame.dispatch_sp = context->sp;
+    context->transition_cookie = runtime->nested_frame.cookie;
+    ++runtime->stats.frame_pushes;
+    runtime->stats.maximum_frame_depth = 2U;
+    runtime->stats.final_frame_depth = 2U;
+    inner_record_address = context->sp - sizeof(uint64_t);
+    if (replace_stack_record(runtime->memory, inner_record_address,
+                             runtime->config.x64_return_sentinel,
+                             &inner_old_record) != GEM_MEMORY_OK)
+        goto Invariant;
+    inner_record_written = true;
+    context->sp = inner_record_address;
+    context->pc = inner.resolved_va;
+    context->isa = GEM_ISA_X64;
+    context->stop_reason = GEM_STOP_NONE;
+
+    while (context->pc != runtime->config.x64_return_sentinel) {
+        if (remaining == 0U)
+            goto Budget;
+        if (gem_arm64ec_target_resolve(runtime->map, context->pc, &target) !=
+                GEM_ARM64EC_TARGET_OK ||
+            target.kind != GEM_ARM64EC_TARGET_X64_BOUNDARY || target.resolved_va != context->pc)
+            goto Invariant;
+        reason = gem_x64_runtime_run(runtime->x64, context, 1U);
+        if (!capture_x64_stop(runtime) || runtime->last_stop.x64.instructions_retired != 1U)
+            goto Invariant;
+        ++runtime->stats.x64_instructions_retired;
+        --remaining;
+        if (context->pc == runtime->config.x64_return_sentinel) {
+            if (reason != GEM_STOP_HOST_RETURN ||
+                !gem_x64_runtime_last_instruction_was_ret(runtime->x64))
+                goto Invariant;
+            break;
+        }
+        if (reason != GEM_STOP_BUDGET_EXPIRED)
+            goto Failure;
+        context->stop_reason = GEM_STOP_NONE;
+    }
+    ++runtime->stats.x64_to_arm64ec_boundaries;
+    if (context->sp != inner_record_address + sizeof(uint64_t) ||
+        replace_stack_record(runtime->memory, inner_record_address, inner_old_record, NULL) !=
+            GEM_MEMORY_OK)
+        goto Invariant;
+    inner_record_written = false;
+    context->x[0] = context->x[8];
+    context->isa = GEM_ISA_ARM64EC;
+    context->pc = runtime->nested_frame.arm_resume_pc;
+    context->sp = runtime->nested_frame.dispatch_sp;
+    context->original_x64_sp = runtime->frame.callback_original_x64_sp;
+    context->transition_cookie = runtime->frame.cookie;
+    context->x[18] = context->teb;
+    context->stop_reason = GEM_STOP_NONE;
+    memset(&runtime->nested_frame, 0, sizeof(runtime->nested_frame));
+    ++runtime->stats.frame_pops;
+    runtime->stats.final_frame_depth = 1U;
+
+    if (remaining == 0U)
+        goto Budget;
+    reason = gem_arm64ec_runtime_run(runtime->arm, context, remaining);
+    if (!consume_arm_budget(runtime, &remaining) || runtime->last_stop.reason != reason)
+        goto Invariant;
+    if (reason == GEM_STOP_BUDGET_EXPIRED)
+        goto Failure;
+    if (reason != GEM_STOP_ARCH_TRANSITION || runtime->stats.dispatch_ret_boundaries != 1U ||
+        context->transition_cookie != runtime->frame.cookie)
+        goto Invariant;
+
+    context->pc = resume.resolved_va;
+    context->sp = runtime->frame.callback_call_sp;
+    context->isa = GEM_ISA_X64;
+    context->original_x64_sp = entry.original_x64_sp;
+    context->x[18] = context->teb;
+    context->stop_reason = GEM_STOP_NONE;
+    while (context->pc != runtime->config.x64_return_sentinel) {
+        if (remaining == 0U)
+            goto Budget;
+        if (gem_arm64ec_target_resolve(runtime->map, context->pc, &target) !=
+                GEM_ARM64EC_TARGET_OK ||
+            target.kind != GEM_ARM64EC_TARGET_X64_BOUNDARY || target.resolved_va != context->pc)
+            goto Invariant;
+        reason = gem_x64_runtime_run(runtime->x64, context, 1U);
+        if (!capture_x64_stop(runtime) || runtime->last_stop.x64.instructions_retired != 1U)
+            goto Invariant;
+        ++runtime->stats.x64_instructions_retired;
+        --remaining;
+        if (context->pc == runtime->config.x64_return_sentinel) {
+            if (reason != GEM_STOP_HOST_RETURN ||
+                !gem_x64_runtime_last_instruction_was_ret(runtime->x64))
+                goto Invariant;
+            break;
+        }
+        if (reason != GEM_STOP_BUDGET_EXPIRED)
+            goto Failure;
+        context->stop_reason = GEM_STOP_NONE;
+    }
+    ++runtime->stats.x64_to_arm64ec_boundaries;
+    if (context->sp != root_record_address + sizeof(uint64_t) ||
+        replace_stack_record(runtime->memory, root_record_address, root_old_record, NULL) !=
+            GEM_MEMORY_OK)
+        goto Invariant;
+    root_record_written = false;
+    context->x[0] = context->x[8];
+    context->isa = GEM_ISA_ARM64EC;
+    context->sp = entry.sp;
+    context->x[30] = entry.x[30];
+    context->pc = entry.x[30];
+    context->original_x64_sp = entry.original_x64_sp;
+    context->x[18] = context->teb;
+    context->stop_reason = GEM_STOP_NONE;
+    runtime->stage = HYBRID_STAGE_ARM_RETURN;
+    if (remaining == 0U)
+        goto Budget;
+    reason = gem_arm64ec_runtime_run(runtime->arm, context, remaining);
+    if (!consume_arm_budget(runtime, &remaining) || runtime->last_stop.reason != reason)
+        goto Invariant;
+    if (reason != GEM_STOP_HOST_RETURN || context->pc != GEM_HYBRID_INTERNAL_HOST_RETURN)
+        goto Failure;
+
+    context->pc = runtime->config.host_return_sentinel;
+    context->transition_cookie = 0U;
+    memset(&runtime->frame, 0, sizeof(runtime->frame));
+    ++runtime->stats.frame_pops;
+    runtime->stats.final_frame_depth = 0U;
+    runtime->stage = HYBRID_STAGE_IDLE;
+    runtime->running = false;
+    runtime->return_mode = 0;
+    runtime->expected_x64_target = 0U;
+    runtime->expected_nested_x64_target = 0U;
+    record_broker_stop(runtime, GEM_STOP_HOST_RETURN);
+    if (stats != NULL)
+        *stats = runtime->stats;
+    return GEM_STOP_HOST_RETURN;
+
+Budget:
+    reason = GEM_STOP_BUDGET_EXPIRED;
+    record_broker_stop(runtime, reason);
+    goto Failure;
+Invariant:
+    reason = GEM_STOP_INVARIANT_VIOLATION;
+    record_broker_stop(runtime, reason);
+Failure:
+    if (inner_record_written && replace_stack_record(runtime->memory, inner_record_address,
+                                                     inner_old_record, NULL) != GEM_MEMORY_OK) {
+        reason = GEM_STOP_INVARIANT_VIOLATION;
+        record_broker_stop(runtime, reason);
+    }
+    if (root_record_written && replace_stack_record(runtime->memory, root_record_address,
+                                                    root_old_record, NULL) != GEM_MEMORY_OK) {
+        reason = GEM_STOP_INVARIANT_VIOLATION;
+        record_broker_stop(runtime, reason);
+    }
+    if (runtime->nested_frame.active)
+        ++runtime->stats.frame_pops;
+    if (runtime->frame.active)
+        ++runtime->stats.frame_pops;
+    memset(&runtime->nested_frame, 0, sizeof(runtime->nested_frame));
+    memset(&runtime->frame, 0, sizeof(runtime->frame));
+    runtime->stats.final_frame_depth = 0U;
+    runtime->stage = HYBRID_STAGE_IDLE;
+    runtime->running = false;
+    runtime->return_mode = 0;
+    runtime->expected_x64_target = 0U;
+    runtime->expected_nested_x64_target = 0U;
     *context = entry;
     context->stop_reason = reason;
     if (stats != NULL)

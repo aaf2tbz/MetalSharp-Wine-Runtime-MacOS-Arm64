@@ -744,6 +744,90 @@ int main(int argc, char **argv) {
         gem_hybrid_runtime_destroy(runtime);
     }
 
+    /* Authentic depth-2 path: the outer x64 CALL enters ARM64EC, whose linked
+     * exit thunk enters a second x64 segment before returning through both
+     * broker-owned frames. */
+    {
+        const gem_hybrid_nested_control control{
+            GEM_HYBRID_NESTED_CONTROL_VERSION,
+            0U,
+            config.loaded_base + entries.at("boundedNested"),
+            config.loaded_base + UINT64_C(0x2810),
+            config.loaded_base + UINT64_C(0x4060),
+            config.loaded_base + UINT64_C(0x27A0),
+            config.loaded_base + UINT64_C(0x406D),
+            config.loaded_base + UINT64_C(0x4050),
+        };
+        gem_hybrid_runtime *runtime = gem_hybrid_runtime_create(harness.memory, metadata, &config);
+        assert(runtime);
+        gem_thread_context oracle{};
+        std::array<std::uint8_t, GEM_GUEST_PAGE_SIZE> oracle_stack{};
+        for (unsigned iteration = 0; iteration < 100U; ++iteration) {
+            auto context = initial_context(control.requested_start_va);
+            context.x[0] = 10U;
+            const auto entry = context;
+            gem_hybrid_roundtrip_stats stats{};
+            const auto reason = gem_hybrid_runtime_run_integer_nested(runtime, &context, &control,
+                                                                      config.max_budget, &stats);
+            if (reason != GEM_STOP_HOST_RETURN)
+                std::fprintf(
+                    stderr,
+                    "nested reason=%u pc=%llx arm=%llu x64=%llu checker=%llu "
+                    "ret=%llu pushes=%llu pops=%llu depth=%u\n",
+                    static_cast<unsigned>(reason), static_cast<unsigned long long>(context.pc),
+                    static_cast<unsigned long long>(stats.arm64ec_instructions_retired),
+                    static_cast<unsigned long long>(stats.x64_instructions_retired),
+                    static_cast<unsigned long long>(stats.checker_boundaries),
+                    static_cast<unsigned long long>(stats.dispatch_ret_boundaries),
+                    static_cast<unsigned long long>(stats.frame_pushes),
+                    static_cast<unsigned long long>(stats.frame_pops), stats.maximum_frame_depth);
+            assert(reason == GEM_STOP_HOST_RETURN);
+            assert(context.x[0] == 85U && context.pc == kHostReturn && context.sp == entry.sp &&
+                   context.x[30] == entry.x[30] && context.x[18] == entry.x[18] &&
+                   context.transition_cookie == 0U);
+            assert(stats.x64_instructions_retired == 8U && stats.checker_boundaries == 2U &&
+                   stats.dispatch_call_boundaries == 0U && stats.x64_to_arm64ec_boundaries == 3U &&
+                   stats.descriptor_resolutions == 1U && stats.dispatch_ret_boundaries == 1U &&
+                   stats.frame_pushes == 2U && stats.frame_pops == 2U &&
+                   stats.maximum_frame_depth == 2U && stats.final_frame_depth == 0U);
+            std::array<std::uint8_t, GEM_GUEST_PAGE_SIZE> current_stack{};
+            assert(gem_memory_read(harness.memory, kStackBase, current_stack.data(),
+                                   current_stack.size()) == GEM_MEMORY_OK);
+            if (iteration == 0U) {
+                oracle = context;
+                oracle_stack = current_stack;
+            } else {
+                assert(std::memcmp(&context, &oracle, sizeof(context)) == 0);
+                assert(current_stack == oracle_stack);
+            }
+        }
+
+        bool exhausted_at_depth_two = false;
+        for (std::uint64_t budget = 1U; budget < 256U && !exhausted_at_depth_two; ++budget) {
+            auto context = initial_context(control.requested_start_va);
+            context.x[0] = 10U;
+            const auto entry = context;
+            gem_hybrid_roundtrip_stats stats{};
+            const auto reason =
+                gem_hybrid_runtime_run_integer_nested(runtime, &context, &control, budget, &stats);
+            if (reason == GEM_STOP_BUDGET_EXPIRED && stats.maximum_frame_depth == 2U) {
+                auto expected = entry;
+                expected.stop_reason = GEM_STOP_BUDGET_EXPIRED;
+                assert(std::memcmp(&context, &expected, sizeof(context)) == 0);
+                assert(stats.frame_pushes == 2U && stats.frame_pops == 2U &&
+                       stats.final_frame_depth == 0U);
+                exhausted_at_depth_two = true;
+            }
+        }
+        assert(exhausted_at_depth_two);
+        auto reused = initial_context(control.requested_start_va);
+        reused.x[0] = 10U;
+        assert(gem_hybrid_runtime_run_integer_nested(runtime, &reused, &control, config.max_budget,
+                                                     nullptr) == GEM_STOP_HOST_RETURN);
+        assert(reused.x[0] == 85U);
+        gem_hybrid_runtime_destroy(runtime);
+    }
+
     /* Authentic Round-1 callback/resumption: metadata selects the x64 entry
      * and ARM callback; the descriptor selects the real entry thunk. */
     {
