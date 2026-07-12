@@ -91,7 +91,7 @@ int main() {
     assert(r);
     assert(
         strstr(gem_x64_runtime_engine_provenance(r),
-               "patch-sha256=a56c8d383548da6d7918890981fdb07170e8be398929d2f2534243a9f5b372e4") !=
+               "patch-sha256=03acc9bc848338e7614a1f487054cc6995e5826c94c4ddbf17365d6a7ae1891a") !=
         nullptr);
     gem_thread_context c{};
     init(c);
@@ -420,6 +420,54 @@ int main() {
         assert(gem_x64_runtime_decode_attempt_info(r, &attempt));
         assert(attempt.valid && attempt.handler_id == BLINK_GEM_HANDLER_OP_LEA_GVQP_M &&
                !strcmp(attempt.name, "OpLeaGvqpM") && attempt.rip == CODE);
+
+        /* The authentic direct path's register-register ADD uses Blink's
+         * OpAluFlip implementation. It updates RAX/flags without touching raw
+         * x87/MM state or guest memory. */
+        gem_x64_runtime_handler_trace_reset(r);
+        const uint8_t add_rax_rcx[] = {0x48, 0x03, 0xc1};
+        assert(gem_memory_write(m, CODE, add_rax_rcx, sizeof(add_rax_rcx)) == GEM_MEMORY_OK);
+        init(c);
+        c.x[8] = 7U;
+        c.x[0] = 5U;
+        const auto add_before = c;
+        assert(gem_x64_runtime_run(r, &c, 1) == GEM_STOP_BUDGET_EXPIRED);
+        assert(c.pc == CODE + sizeof(add_rax_rcx) && c.x[8] == 12U && c.x[0] == 5U);
+        assert(!memcmp(c.x87, add_before.x87, sizeof(c.x87)));
+        assert(gem_x64_runtime_decode_attempt_info(r, &attempt));
+        assert(attempt.valid && attempt.handler_id == BLINK_GEM_HANDLER_OP_ALU_FLIP &&
+               !strcmp(attempt.name, "OpAluwFlip") && attempt.rip == CODE);
+
+        /* OpAluFlip is shared by unrelated ALU opcodes. The allowlist admits
+         * only decoder mopcode 0x003 used by the authentic ADD; OR remains
+         * fail-closed despite resolving to the same Blink handler pointer. */
+        gem_x64_runtime_handler_trace_reset(r);
+        const uint8_t or_rax_rcx[] = {0x48, 0x0b, 0xc1};
+        assert(gem_memory_write(m, CODE, or_rax_rcx, sizeof(or_rax_rcx)) == GEM_MEMORY_OK);
+        init(c);
+        const auto or_before = c;
+        assert(gem_x64_runtime_run(r, &c, 1) == GEM_STOP_UNSUPPORTED_INSTRUCTION);
+        assert(c.pc == or_before.pc && !memcmp(c.x87, or_before.x87, sizeof(c.x87)));
+        assert(gem_x64_runtime_decode_attempt_info(r, &attempt));
+        assert(attempt.valid && attempt.mopcode == 0x00bU && attempt.handler_id == 0U &&
+               !strcmp(attempt.name, "OpAluwFlip") && attempt.rip == CODE);
+
+        /* Width and ModR/M form are also part of the narrow admission rule. */
+        const std::array<std::array<uint8_t, 3>, 2> rejected_adds = {
+            {{0x03, 0xc1, 0x90}, {0x48, 0x03, 0x01}}};
+        for (const auto &rejected_add : rejected_adds) {
+            gem_x64_runtime_handler_trace_reset(r);
+            assert(gem_memory_write(m, CODE, rejected_add.data(), rejected_add.size()) ==
+                   GEM_MEMORY_OK);
+            init(c);
+            auto rejected_expected = c;
+            rejected_expected.stop_reason = GEM_STOP_UNSUPPORTED_INSTRUCTION;
+            assert(gem_x64_runtime_run(r, &c, 1) == GEM_STOP_UNSUPPORTED_INSTRUCTION);
+            assert(!memcmp(&c, &rejected_expected, sizeof(c)));
+            assert(gem_x64_runtime_decode_attempt_info(r, &attempt));
+            assert(attempt.valid && attempt.mopcode == 0x003U && attempt.handler_id == 0U &&
+                   !strcmp(attempt.name, "OpAluwFlip") && attempt.rip == CODE);
+        }
 
         /* Reviewed relative CALL transactionally pushes its return address and
          * retires with Blink's decoder-owned handler id. */

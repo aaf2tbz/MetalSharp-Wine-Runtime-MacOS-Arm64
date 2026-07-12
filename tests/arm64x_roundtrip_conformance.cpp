@@ -184,23 +184,23 @@ struct PhaseBPath {
     const char *x64_decode_name;
 };
 /* Authentic decoder-owned x64 evidence pinned against Blink's own dispatch.
- * LEA and CALL are reviewed handlers 10 and 11. Direct execution then reaches
- * the still-unsupported OpAluFlip. Callback and nested CALLs retire normally,
- * and checked ARM64X metadata stops the probe before any ARM64EC byte can be
- * fetched as x64. */
+ * LEA, CALL, and ALU-flip are reviewed handlers 10, 11, and 12. The direct
+ * segment now reaches its controlled RET. Callback and nested CALLs retire
+ * normally, and checked ARM64X metadata stops the probe before any ARM64EC byte
+ * can be fetched as x64. */
 constexpr std::array<PhaseBPath, 4> kPhaseBPaths = {{
     {"direct",
      UINT32_C(0x4080),
-     GEM_STOP_UNSUPPORTED_INSTRUCTION,
-     1U,
-     1U,
-     {10, 0, 0, 0},
-     {0x4080, 0, 0, 0},
-     true,
-     UINT32_C(0x4088),
-     true,
+     GEM_STOP_HOST_RETURN,
+     3U,
+     3U,
+     {10, 12, 9, 0},
+     {0x4080, 0x4088, 0x408B, 0},
+     false,
      0U,
-     "OpAluwFlip"},
+     true,
+     9U,
+     "OpRet"},
     {"callbackResume",
      UINT32_C(0x4020),
      GEM_STOP_ARCH_TRANSITION,
@@ -320,6 +320,7 @@ struct X64SegmentEvidence {
     std::uint64_t cpu_hash{};
     std::uint64_t stack_hash{};
     std::uint64_t code_hash{};
+    std::uint64_t final_rax{};
     bool decode_valid{};
     std::uint64_t decode_rip{};
     std::uint32_t decode_handler_id{};
@@ -381,6 +382,7 @@ X64SegmentEvidence probe_x64_segment(gem_memory *memory, const gem_pe_arm64x_ima
     evidence.reason = reason;
     evidence.retired = retired;
     evidence.stop_pc = context.pc;
+    evidence.final_rax = context.x[8];
 
     std::uint32_t count = 0U;
     std::uint32_t overflow = 0U;
@@ -539,6 +541,8 @@ void write_phase_b_trace(const char *path, Harness &harness,
             assert(segment.stop_rva == expected.x64_stop_rva);
         else
             assert(segment.stop_pc == kX64SegmentSentinel);
+        if (std::string(entry_name) == "direct")
+            assert(segment.final_rax == UINT64_C(17));
 
         /* Decoder-owned identity for the final attempted or retired instruction.
          * CALL names come from Blink and metadata classification stops before
@@ -610,6 +614,7 @@ void write_phase_b_trace(const char *path, Harness &harness,
         os << ",\"x64CpuHash\":\"" << hex_u64(segment.cpu_hash) << '"';
         os << ",\"x64StackHash\":\"" << hex_u64(segment.stack_hash) << '"';
         os << ",\"x64CodeHash\":\"" << hex_u64(segment.code_hash) << '"';
+        os << ",\"x64Rax\":" << hex_u64_quoted(segment.final_rax);
         os << ",\"x64DecodeAttempt\":{";
         os << "\"valid\":" << (segment.decode_valid ? "true" : "false");
         os << ",\"rip\":" << hex_u64_quoted(segment.decode_rip);

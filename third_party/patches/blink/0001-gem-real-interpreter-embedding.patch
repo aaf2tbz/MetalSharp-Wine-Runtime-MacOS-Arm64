@@ -1,9 +1,9 @@
 diff --git a/blink/gem_embed.c b/blink/gem_embed.c
 new file mode 100644
-index 0000000..7e564a2
+index 0000000..2708bb1
 --- /dev/null
 +++ b/blink/gem_embed.c
-@@ -0,0 +1,425 @@
+@@ -0,0 +1,427 @@
 +/*
 + * Copyright 2022 Justine Alexandra Roberts Tunney
 + * Copyright 2026 MetalSharp Wine Runtime contributors
@@ -259,7 +259,8 @@ index 0000000..7e564a2
 +      LoadInstruction(m, m->ip);
 +      fetch_address = m->ip;
 +      fetch_size = Oplength(m->xedd->op.rde);
-+      handler_id = GemHandlerId(GetOp(Mopcode(m->xedd->op.rde)));
++      handler_id =
++          GemHandlerId(GetOp(Mopcode(m->xedd->op.rde)), m->xedd->op.rde);
 +      /* Capture Blink's own decode dispatch result for the most recent
 +       * LoadInstruction. handler_id is the reviewed allowlist id, or zero when
 +       * outside that set; name is Blink's stable DescribeMopcode() mnemonic. */
@@ -413,6 +414,7 @@ index 0000000..7e564a2
 +    case BLINK_GEM_HANDLER_OP_RET: return "OpRet";
 +    case BLINK_GEM_HANDLER_OP_LEA_GVQP_M: return "OpLeaGvqpM";
 +    case BLINK_GEM_HANDLER_OP_CALL_JVDS: return "OpCallJvds";
++    case BLINK_GEM_HANDLER_OP_ALU_FLIP: return "OpAluFlip";
 +    default: return "OpUnknown";
 +  }
 +}
@@ -431,10 +433,10 @@ index 0000000..7e564a2
 +}
 diff --git a/blink/gem_embed.h b/blink/gem_embed.h
 new file mode 100644
-index 0000000..2d97cf9
+index 0000000..e366d86
 --- /dev/null
 +++ b/blink/gem_embed.h
-@@ -0,0 +1,156 @@
+@@ -0,0 +1,157 @@
 +/*
 + * Copyright 2022 Justine Alexandra Roberts Tunney
 + * Copyright 2026 MetalSharp Wine Runtime contributors
@@ -482,7 +484,8 @@ index 0000000..2d97cf9
 +  BLINK_GEM_HANDLER_OP_JMP = 8,
 +  BLINK_GEM_HANDLER_OP_RET = 9,
 +  BLINK_GEM_HANDLER_OP_LEA_GVQP_M = 10,
-+  BLINK_GEM_HANDLER_OP_CALL_JVDS = 11
++  BLINK_GEM_HANDLER_OP_CALL_JVDS = 11,
++  BLINK_GEM_HANDLER_OP_ALU_FLIP = 12
 +};
 +struct blink_gem_trace_entry {
 +  uint64_t rip;
@@ -592,11 +595,11 @@ index 0000000..2d97cf9
 +const char* blink_gem_decode_attempt_name(const struct blink_gem_decode_attempt*);
 +#endif
 diff --git a/blink/machine.c b/blink/machine.c
-index ad309eb..92f4bd3 100644
+index ad309eb..42a6d1b 100644
 --- a/blink/machine.c
 +++ b/blink/machine.c
-@@ -2092,0 +2093,19 @@ nexgen32e_f GetOp(long op) {
-+int GemHandlerId(nexgen32e_f handler) {
+@@ -2092,0 +2093,24 @@ nexgen32e_f GetOp(long op) {
++int GemHandlerId(nexgen32e_f handler, long rde) {
 +  if (handler == OpNop) return 1;
 +  if (handler == OpMovZvqpIvqp) return 2;
 +  if (handler == OpMovEvqpGvqp) return 3;
@@ -608,22 +611,27 @@ index ad309eb..92f4bd3 100644
 +  if (handler == OpRet) return 9;
 +  if (handler == OpLeaGvqpM) return 10;
 +  if (handler == OpCallJvds) return 11;
++  /* Narrow the shared ALU handler to the authentic register-register REX.W
++   * ADD Gvqp,Evqp. Other widths, memory forms, and operations remain rejected. */
++  if (handler == OpAluFlip && Mopcode(rde) == 0x003 && Rexw(rde) &&
++      IsModrmRegister(rde))
++    return 12;
 +  return 0;
 +}
 +
-+bool GemIsAllowedHandler(nexgen32e_f handler) {
-+  return GemHandlerId(handler) != 0;
++bool GemIsAllowedHandler(nexgen32e_f handler, long rde) {
++  return GemHandlerId(handler, rde) != 0;
 +}
 +
 diff --git a/blink/machine.h b/blink/machine.h
-index be17a8a..2d908fe 100644
+index be17a8a..b0507cb 100644
 --- a/blink/machine.h
 +++ b/blink/machine.h
 @@ -440,0 +441 @@ struct Machine {               //
 +  bool gemembed;                         // structured embedding mode
 @@ -479,0 +481,2 @@ nexgen32e_f GetOp(long);
-+bool GemIsAllowedHandler(nexgen32e_f);
-+int GemHandlerId(nexgen32e_f);
++bool GemIsAllowedHandler(nexgen32e_f, long);
++int GemHandlerId(nexgen32e_f, long);
 diff --git a/blink/throw.c b/blink/throw.c
 index a2f8a88..5943ee3 100644
 --- a/blink/throw.c

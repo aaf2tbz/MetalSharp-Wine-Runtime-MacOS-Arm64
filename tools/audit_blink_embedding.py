@@ -19,6 +19,7 @@ APPROVED_HANDLERS = (
     "OpRet",
     "OpLeaGvqpM",
     "OpCallJvds",
+    "OpAluFlip",
 )
 
 
@@ -81,31 +82,67 @@ def audit_handlers(source_root, provenance, machine_text):
             f"handler definition drift {name}",
         )
 
+    for entry in provenance.get("reviewedHelperSources", ()):
+        need(
+            digest(source_root / entry["file"]) == entry["sourceSha256"],
+            f"reviewed helper source hash drift {entry['file']}",
+        )
+
 
 def audit_trace(provenance, machine_text, embedding_text, embedding_header):
     # The decoder-owned handler identity is the single authority for both the
     # allowlist decision and the diagnostic trace id.  GemHandlerId maps the
-    # exact Blink handler pointer to a stable 1..11 id, and GemIsAllowedHandler
-    # is derived from it, so no second allowlist or byte decoder is introduced.
+    # exact Blink handler pointer to a stable 1..12 id. Shared handlers may be
+    # narrowed by Blink's already-decoded mopcode; no byte decoder is added.
     mapped = tuple(
         (name, int(value))
         for name, value in re.findall(
             r"if \(handler == (Op[A-Za-z0-9_]+)\) return (\d+);", machine_text
         )
     )
-    need(tuple(name for name, _ in mapped) == APPROVED_HANDLERS, "GemHandlerId ordering drift")
     need(
-        tuple(value for _, value in mapped) == tuple(range(1, len(APPROVED_HANDLERS) + 1)),
-        "GemHandlerId numbering drift",
+        tuple(name for name, _ in mapped) == APPROVED_HANDLERS[:-1],
+        "unrestricted GemHandlerId ordering drift",
     )
     need(
-        "return GemHandlerId(handler) != 0;" in machine_text,
+        tuple(value for _, value in mapped) == tuple(range(1, len(APPROVED_HANDLERS))),
+        "unrestricted GemHandlerId numbering drift",
+    )
+    restricted = provenance["handlerTrace"]["restrictions"]
+    need(
+        restricted
+        == [
+            {
+                "name": "OpAluFlip",
+                "mopcode": 3,
+                "rexW": True,
+                "modrmRegister": True,
+                "decodedName": "OpAluwFlip",
+                "reason": "only authentic register-register REX.W ADD Gvqp,Evqp; other widths, memory forms, and shared ALU mappings remain rejected",
+            }
+        ],
+        "handler restriction provenance drift",
+    )
+    need(
+        re.search(
+            r"if \(handler == OpAluFlip && Mopcode\(rde\) == 0x003 && Rexw\(rde\) &&\s*"
+            r"IsModrmRegister\(rde\)\)\s*return 12;",
+            machine_text,
+        ),
+        "restricted OpAluFlip allowlist drift",
+    )
+    need(
+        "return GemHandlerId(handler, rde) != 0;" in machine_text,
         "GemIsAllowedHandler not derived from GemHandlerId",
     )
 
     # Identity must originate at Blink's own selected decode/dispatch handler.
     need(
-        "GemHandlerId(GetOp(Mopcode(m->xedd->op.rde)))" in embedding_text,
+        re.search(
+            r"GemHandlerId\(GetOp\(Mopcode\(m->xedd->op.rde\)\),\s*"
+            r"m->xedd->op.rde\)",
+            embedding_text,
+        ),
         "trace identity not sourced from Blink decode dispatch",
     )
     need("blink_gem_machine_trace_reset" in embedding_text, "trace reset missing")
@@ -129,8 +166,8 @@ def audit_trace(provenance, machine_text, embedding_text, embedding_header):
 
 def audit_decode_attempt(provenance, machine_text, embedding_text, embedding_header):
     # The "last decode attempt" record captures Blink's own decode dispatch
-    # result for every LoadInstruction, including unsupported opcodes such as
-    # LEA (0x8d) and CALL (0xe8).  It is reset on every step, populated
+    # result for every LoadInstruction, including handlers or mopcode variants
+    # outside the reviewed set. It is reset on every step, populated
     # immediately after a successful LoadInstruction using Blink's own
     # Mopcode()/DescribeMopcode() helpers, and never influences execution,
     # allowlisting, or committed architectural state.
@@ -170,7 +207,11 @@ def audit_decode_attempt(provenance, machine_text, embedding_text, embedding_hea
         "decode attempt name source header missing",
     )
     need(
-        "GemHandlerId(GetOp(Mopcode(m->xedd->op.rde)))" in embedding_text
+        re.search(
+            r"GemHandlerId\(GetOp\(Mopcode\(m->xedd->op.rde\)\),\s*"
+            r"m->xedd->op.rde\)",
+            embedding_text,
+        )
         and "g->last_decode.handler_id" in embedding_text,
         "decode attempt handler_id not sourced from GemHandlerId",
     )
