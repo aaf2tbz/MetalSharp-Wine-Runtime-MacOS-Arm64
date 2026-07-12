@@ -28,6 +28,7 @@ jobs:
       - run: >-
           python3 -m py_compile
           tools/audit_blink_memory_order.py
+          tools/audit_blink_embedding.py
           tools/ci/check-repository.py
           tools/ci/run-blink-tso-conformance.py
           tools/ci/test-check-repository.py
@@ -160,6 +161,26 @@ jobs:
         run: >-
           python3 tools/ci/validate-blink-tso-evidence.py
           "${{ runner.temp }}/blink-tso/evidence.json"
+
+  blink-x64-engine:
+    name: Real Blink interpreter adapter (native macOS ARM64)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - run: test "$(uname -m)" = arm64
+      - run: test "$(sysctl -in sysctl.proc_translated 2>/dev/null || echo 0)" = 0
+      - run: brew install make
+      - run: >-
+          cmake -S . -B build-x64
+          -DMSWR_ENABLE_X64_ENGINE=ON
+          -DMSWR_X64_ENGINE_CONFORMANCE=ON
+          -DMSWR_WARNINGS_AS_ERRORS=ON
+      - run: cmake --build build-x64 --parallel
+      - run: ctest --test-dir build-x64 -R gem.x64_engine_conformance --output-on-failure
+      - run: tools/ci/audit-zero-rosetta.sh build-x64
+      - run: test -z "$(grep HAVE_JIT build-x64/_deps/blink_gem-src/config.h || true)"
 
   arm64x-toolchain-probe:
     name: ARM64X toolchain probe (native Windows ARM64)

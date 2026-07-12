@@ -243,6 +243,26 @@ final oracle; no generated artifact enters the checkout.
 - [ ] Linux GCC/Clang, macOS Apple Clang, native Windows ARM64 fixture/probe, formatting,
       repository-policy, licensing/provenance, leakage, and full test gates pass.
 
+## Phase 0–2 implementation increment
+
+The opt-in adapter applies a hashed ISC patch to the verified pinned archive and builds Blink's
+actual static interpreter with JIT disabled. Blink's established decoder selects a source-reviewed
+handler-function allowlist; the patch adds no decoder or opcode parser. The provenance record fixes
+the exact allowlist, each defining file's SHA-256, the reviewed definition line range, and the
+definition SHA-256. The embedding audit rejects any addition, removal, reordering, source drift, or
+definition drift; no semantics are claimed for handlers outside that manifest. Adapter-owned
+bounded shadow pages are refreshed while a private GEM memory transaction holds canonical memory
+stable.
+Fetch/read/write sets are validated through GEM, full-page differences are staged and atomically
+committed, and CPU state is exported only after memory succeeds. Raw x87/MM slots remain a
+sidecar, and handlers not proven independent of x87/MM fail closed before execution.
+
+This narrow engine conformance increment does not implement or claim Phase 3 transition-broker or
+authentic hybrid-round-trip behavior, and no Milestone 5 item is marked complete. Deterministic
+allocation-failure injection is not exposed by the pinned embedding or GEM allocator and is
+therefore explicitly unsupported in this increment; tests do not introduce nondeterministic host
+out-of-memory pressure as a substitute.
+
 ## Consequences
 
 If accepted, Blink becomes an x64 execution engine behind GEM rather than an owner of runtime

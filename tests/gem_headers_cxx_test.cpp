@@ -6,6 +6,7 @@
 #include "metalsharp/gem/context_serialization.h"
 #include "metalsharp/gem/memory.h"
 #include "metalsharp/gem/pe_arm64x.h"
+#include "metalsharp/gem/x64_engine.h"
 
 #include <type_traits>
 

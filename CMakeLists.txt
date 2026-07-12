@@ -11,6 +11,8 @@ option(MSWR_ENGINE_DYNARMIC "Use Dynarmic as the ARM64EC correctness engine back
 option(MSWR_ENGINE_CONFORMANCE "Build ARM64EC engine conformance tests" OFF)
 option(MSWR_ZERO_ROSETTA_AUDIT "Build/run native ARM64 macOS zero-Rosetta audit tests" OFF)
 option(MSWR_FETCH_DYNARMIC "Fetch the pinned Dynarmic dependency when engine support is enabled" ON)
+option(MSWR_ENABLE_X64_ENGINE "Build pinned Blink's interpreter-only GEM adapter" OFF)
+option(MSWR_X64_ENGINE_CONFORMANCE "Build x64 engine conformance tests" OFF)
 option(MSWR_BUILD_ARM64X_ISSUE11_PROBE "Build the native Windows ARM64 issue #11 probe" OFF)
 # Raw ARM64EC COFF is structural research only: it is not a linked ARM64X fixture.
 option(MSWR_GENERATE_ARM64EC_THUNK_FIXTURES "Generate non-binding LLVM ARM64EC COFF research evidence" OFF)
@@ -131,6 +133,53 @@ if(MSWR_ENABLE_ARM64EC_ENGINE)
     endif()
     target_link_libraries(metalsharp_gem PRIVATE dynarmic)
 endif()
+
+if(MSWR_ENABLE_X64_ENGINE)
+    include(FetchContent)
+    include(ExternalProject)
+    find_program(MSWR_BLINK_MAKE_EXECUTABLE NAMES gmake make)
+    if(NOT MSWR_BLINK_MAKE_EXECUTABLE)
+        message(FATAL_ERROR "Blink embedding requires a compatible make executable (gmake or make)")
+    endif()
+    FetchContent_Declare(blink_gem
+        URL https://github.com/jart/blink/archive/f006a4fc6f9b8de9272504fdff0dbbe5ce5dc580.tar.gz
+        URL_HASH SHA256=e0bad68ba2927a1ca1d53537afee1644e11a1e683d26676a36e5b9b17a63d6af
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+        PATCH_COMMAND "${CMAKE_COMMAND}" "-DBLINK_SOURCE_DIR=<SOURCE_DIR>"
+            "-DMSWR_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/patch-blink-gem.cmake")
+    FetchContent_MakeAvailable(blink_gem)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    execute_process(COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/audit_blink_embedding.py"
+        --source "${blink_gem_SOURCE_DIR}"
+        --patch "${CMAKE_CURRENT_SOURCE_DIR}/third_party/patches/blink/0001-gem-real-interpreter-embedding.patch"
+        --provenance "${CMAKE_CURRENT_SOURCE_DIR}/docs/architecture/adr/0008-blink-embedding.provenance.json"
+        RESULT_VARIABLE blink_audit_result)
+    if(NOT blink_audit_result EQUAL 0)
+        message(FATAL_ERROR "real Blink embedding audit failed")
+    endif()
+    ExternalProject_Add(blink_gem_build
+        SOURCE_DIR "${blink_gem_SOURCE_DIR}"
+        DOWNLOAD_COMMAND ""
+        UPDATE_COMMAND ""
+        PATCH_COMMAND ""
+        CONFIGURE_COMMAND "${blink_gem_SOURCE_DIR}/configure" --disable-jit
+        BUILD_COMMAND "${MSWR_BLINK_MAKE_EXECUTABLE}" clean
+        COMMAND "${MSWR_BLINK_MAKE_EXECUTABLE}" -j2 o//blink/blink.a
+        INSTALL_COMMAND ""
+        BUILD_IN_SOURCE TRUE
+        BUILD_BYPRODUCTS "${blink_gem_SOURCE_DIR}/o/blink/blink.a")
+    add_library(blink_gem_archive STATIC IMPORTED GLOBAL)
+    set_target_properties(blink_gem_archive PROPERTIES
+        IMPORTED_LOCATION "${blink_gem_SOURCE_DIR}/o/blink/blink.a")
+    add_dependencies(blink_gem_archive blink_gem_build)
+    target_sources(metalsharp_gem PRIVATE src/gem/x64_engine.c src/gem/x64_blink.c)
+    target_include_directories(metalsharp_gem PRIVATE "${blink_gem_SOURCE_DIR}")
+    target_link_libraries(metalsharp_gem PRIVATE blink_gem_archive m)
+elseif(MSWR_X64_ENGINE_CONFORMANCE)
+    message(FATAL_ERROR "MSWR_X64_ENGINE_CONFORMANCE requires MSWR_ENABLE_X64_ENGINE")
+endif()
 mswr_enable_warnings(metalsharp_gem)
 
 if(MSWR_BUILD_ARM64X_ISSUE11_PROBE)
@@ -193,6 +242,16 @@ if(BUILD_TESTING)
         mswr_enable_warnings(arm64ec_engine_conformance)
         add_test(NAME gem.arm64ec_engine_conformance COMMAND arm64ec_engine_conformance)
         set_tests_properties(gem.arm64ec_engine_conformance PROPERTIES LABELS "gem.engine.conformance")
+    endif()
+
+    if(MSWR_X64_ENGINE_CONFORMANCE)
+        add_executable(x64_engine_conformance tests/x64_engine_conformance.cpp)
+        target_link_libraries(x64_engine_conformance PRIVATE metalsharp_gem)
+        target_include_directories(x64_engine_conformance PRIVATE "${blink_gem_SOURCE_DIR}")
+        target_compile_features(x64_engine_conformance PRIVATE cxx_std_17)
+        mswr_enable_warnings(x64_engine_conformance)
+        add_test(NAME gem.x64_engine_conformance COMMAND x64_engine_conformance)
+        set_tests_properties(gem.x64_engine_conformance PROPERTIES LABELS "zero-rosetta;gem.engine")
     endif()
 
     if(MSWR_ZERO_ROSETTA_AUDIT)
