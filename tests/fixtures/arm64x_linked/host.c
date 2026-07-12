@@ -4,7 +4,6 @@
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
-#include <string.h>
 #include <windows.h>
 
 typedef uint64_t (*fixture_u64_fn)(uint64_t);
@@ -15,12 +14,12 @@ static int fail(const char *message) {
 }
 
 static fixture_u64_fn find_u64(HMODULE module, const char *name) {
-    FARPROC address = GetProcAddress(module, name);
-    fixture_u64_fn function = NULL;
-    if (sizeof(address) != sizeof(function))
-        return NULL;
-    memcpy(&function, &address, sizeof(function));
-    return function;
+    union {
+        FARPROC address;
+        fixture_u64_fn function;
+    } value;
+    value.address = GetProcAddress(module, name);
+    return value.function;
 }
 
 static int write_native_evidence(const char *path) {
