@@ -654,6 +654,106 @@ int main(int argc, char **argv) {
     gem_thread_context expected_context{};
     std::array<std::uint8_t, GEM_GUEST_PAGE_SIZE> expected_stack{};
 
+    /* Authentic Round-1 callback/resumption: metadata selects the x64 entry
+     * and ARM callback; the descriptor selects the real entry thunk. */
+    {
+        gem_arm64ec_target_result callback_entry{}, callback{};
+        assert(gem_arm64ec_target_resolve(harness.map, config.loaded_base + UINT64_C(0x4020),
+                                          &callback_entry) == GEM_ARM64EC_TARGET_OK);
+        assert(callback_entry.kind == GEM_ARM64EC_TARGET_X64_BOUNDARY &&
+               callback_entry.resolved_va == config.loaded_base + UINT64_C(0x4020));
+        assert(gem_arm64ec_target_resolve(harness.map,
+                                          config.loaded_base + entries.at("armCallback"),
+                                          &callback) == GEM_ARM64EC_TARGET_OK);
+        assert(callback.kind == GEM_ARM64EC_TARGET_ARM64EC &&
+               callback.resolved_va == config.loaded_base + UINT64_C(0x2790));
+        gem_arm64ec_target_result callback_thunk{};
+        assert(gem_arm64ec_descriptor_resolve(harness.map, harness.memory,
+                                              callback.resolved_va - UINT64_C(4), nullptr,
+                                              &callback_thunk) == GEM_ARM64EC_TARGET_OK);
+        assert(callback_thunk.kind == GEM_ARM64EC_TARGET_ARM64EC &&
+               callback_thunk.resolved_va == config.loaded_base + UINT64_C(0x3B78));
+        const auto resume = config.loaded_base + UINT64_C(0x402D);
+        gem_hybrid_runtime *runtime = gem_hybrid_runtime_create(harness.memory, metadata, &config);
+        assert(runtime);
+        gem_thread_context oracle{};
+        std::array<std::uint8_t, GEM_GUEST_PAGE_SIZE> oracle_stack{};
+        for (unsigned iteration = 0; iteration < 100U; ++iteration) {
+            auto context = initial_context(harness.caller);
+            context.isa = GEM_ISA_X64;
+            context.pc = callback_entry.resolved_va;
+            context.x[0] = 10U;
+            const auto initial = context;
+            gem_hybrid_roundtrip_stats stats{};
+            assert(gem_hybrid_runtime_run_integer_callback_resume(
+                       runtime, &context, callback.resolved_va, resume, config.max_budget,
+                       &stats) == GEM_STOP_ARCH_TRANSITION);
+            assert_stop(runtime, GEM_STOP_ARCH_TRANSITION, GEM_HYBRID_STOP_SOURCE_BROKER);
+            if (context.isa != GEM_ISA_X64 || context.pc != resume ||
+                context.sp != initial.sp - UINT64_C(0x28) || context.x[8] != 63U ||
+                context.x[18] != context.teb || context.transition_cookie != 0U)
+                std::fprintf(stderr,
+                             "callback result x0=%llx x8=%llx pc=%llx sp=%llx initial_sp=%llx "
+                             "lr=%llx original=%llx\\n",
+                             static_cast<unsigned long long>(context.x[0]),
+                             static_cast<unsigned long long>(context.x[8]),
+                             static_cast<unsigned long long>(context.pc),
+                             static_cast<unsigned long long>(context.sp),
+                             static_cast<unsigned long long>(initial.sp),
+                             static_cast<unsigned long long>(context.x[30]),
+                             static_cast<unsigned long long>(context.original_x64_sp));
+            assert(context.isa == GEM_ISA_X64 && context.pc == resume &&
+                   context.sp == initial.sp - UINT64_C(0x28) && context.x[0] == 63U &&
+                   context.x[8] == 63U && context.x[18] == context.teb &&
+                   context.transition_cookie == 0U);
+            assert(std::memcmp(context.x87, initial.x87, sizeof(context.x87)) == 0);
+            assert(stats.x64_instructions_retired == 3U && stats.x64_to_arm64ec_boundaries == 1U &&
+                   stats.descriptor_resolutions == 1U && stats.dispatch_ret_boundaries == 1U &&
+                   stats.frame_pushes == 1U && stats.frame_pops == 1U &&
+                   stats.maximum_frame_depth == 1U && stats.final_frame_depth == 0U);
+            std::uint64_t record = 0U;
+            assert(gem_memory_read(harness.memory, initial.sp - UINT64_C(0x30), &record,
+                                   sizeof(record)) == GEM_MEMORY_OK &&
+                   record == resume);
+            std::array<std::uint8_t, GEM_GUEST_PAGE_SIZE> stack{};
+            assert(gem_memory_read(harness.memory, kStackBase + kStackSize - GEM_GUEST_PAGE_SIZE,
+                                   stack.data(), stack.size()) == GEM_MEMORY_OK);
+            if (iteration == 0U) {
+                oracle = context;
+                oracle_stack = stack;
+            } else {
+                assert(std::memcmp(&context, &oracle, sizeof(context)) == 0);
+                assert(stack == oracle_stack);
+            }
+        }
+
+        /* Exhaustion immediately after CALL rolls CPU back but deliberately
+         * retains CALL's committed return record; the same runtime retries. */
+        auto failed = initial_context(harness.caller);
+        failed.isa = GEM_ISA_X64;
+        failed.pc = callback_entry.resolved_va;
+        failed.x[0] = 10U;
+        const auto failed_initial = failed;
+        gem_hybrid_roundtrip_stats failed_stats{};
+        assert(gem_hybrid_runtime_run_integer_callback_resume(
+                   runtime, &failed, callback.resolved_va, resume, 3U, &failed_stats) ==
+               GEM_STOP_BUDGET_EXPIRED);
+        auto expected_failed = failed_initial;
+        expected_failed.stop_reason = GEM_STOP_BUDGET_EXPIRED;
+        assert(std::memcmp(&failed, &expected_failed, sizeof(failed)) == 0);
+        assert(failed_stats.x64_instructions_retired == 3U && failed_stats.frame_pushes == 1U &&
+               failed_stats.frame_pops == 1U && failed_stats.final_frame_depth == 0U);
+        std::uint64_t retained = 0U;
+        assert(gem_memory_read(harness.memory, failed_initial.sp - UINT64_C(0x30), &retained,
+                               sizeof(retained)) == GEM_MEMORY_OK &&
+               retained == resume);
+        failed = failed_initial;
+        assert(gem_hybrid_runtime_run_integer_callback_resume(
+                   runtime, &failed, callback.resolved_va, resume, config.max_budget, nullptr) ==
+               GEM_STOP_ARCH_TRANSITION);
+        gem_hybrid_runtime_destroy(runtime);
+    }
+
     for (unsigned iteration = 0; iteration < 100U; ++iteration) {
         gem_hybrid_runtime *runtime = gem_hybrid_runtime_create(harness.memory, metadata, &config);
         assert(runtime);

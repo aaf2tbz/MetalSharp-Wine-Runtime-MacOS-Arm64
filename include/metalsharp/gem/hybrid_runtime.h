@@ -71,6 +71,12 @@ void gem_hybrid_runtime_destroy(struct gem_hybrid_runtime *runtime);
 enum gem_stop_reason gem_hybrid_runtime_run_integer_roundtrip(
     struct gem_hybrid_runtime *runtime, struct gem_thread_context *context, uint64_t caller_va,
     uint64_t finish_va, uint64_t budget, struct gem_hybrid_roundtrip_stats *stats);
+/* Runs only the bounded x64 CALL -> ARM64EC callback -> x64 resumption segment.
+ * The CALL-owned return record remains committed on both success and later
+ * failure; canonical CPU state is restored on failure. */
+enum gem_stop_reason gem_hybrid_runtime_run_integer_callback_resume(
+    struct gem_hybrid_runtime *runtime, struct gem_thread_context *context, uint64_t callback_va,
+    uint64_t expected_resume_va, uint64_t budget, struct gem_hybrid_roundtrip_stats *stats);
 bool gem_hybrid_runtime_last_stop_info(const struct gem_hybrid_runtime *runtime,
                                        struct gem_hybrid_stop_info *out_info);
 

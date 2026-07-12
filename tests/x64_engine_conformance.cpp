@@ -486,6 +486,38 @@ int main() {
         assert(gem_x64_runtime_decode_attempt_info(r, &attempt));
         assert(attempt.valid && attempt.handler_id == BLINK_GEM_HANDLER_OP_CALL_JVDS &&
                !strcmp(attempt.name, "OpCallJvds") && attempt.rip == CODE);
+
+        /* CALL's return-record write is transactional on an unwritable stack. */
+        const std::array<uint8_t, 8> call_stack_pattern = {0x10, 0x21, 0x32, 0x43,
+                                                           0x54, 0x65, 0x76, 0x87};
+        assert(gem_memory_write(m, STACK + 4088U, call_stack_pattern.data(),
+                                call_stack_pattern.size()) == GEM_MEMORY_OK);
+        uint32_t stack_protection = 0U;
+        assert(gem_memory_protect(m, STACK, 4096U, GEM_PAGE_READONLY, &stack_protection) ==
+               GEM_MEMORY_OK);
+        init(c);
+        c.sp = STACK + 4096U;
+        auto failed_call_expected = c;
+        failed_call_expected.stop_reason = GEM_STOP_MEMORY_FAULT;
+        assert(gem_x64_runtime_run(r, &c, 1) == GEM_STOP_MEMORY_FAULT);
+        assert(!memcmp(&c, &failed_call_expected, sizeof(c)));
+        gem_x64_stop_info call_fault{};
+        assert(gem_x64_runtime_last_stop_info(r, &call_fault) &&
+               call_fault.reason == GEM_STOP_MEMORY_FAULT &&
+               call_fault.instructions_retired == 0U && call_fault.fault_address == STACK &&
+               call_fault.access == GEM_X64_ACCESS_WRITE &&
+               call_fault.memory_error == GEM_MEMORY_ACCESS_DENIED);
+        std::array<uint8_t, 8> failed_call_stack{};
+        assert(gem_memory_read(m, STACK + 4088U, failed_call_stack.data(),
+                               failed_call_stack.size()) == GEM_MEMORY_OK);
+        assert(failed_call_stack == call_stack_pattern);
+        assert(gem_memory_protect(m, STACK, 4096U, stack_protection, &stack_protection) ==
+               GEM_MEMORY_OK);
+
+        /* The same runtime remains reusable after the failed transaction. */
+        init(c);
+        assert(gem_x64_runtime_run(r, &c, 1) == GEM_STOP_BUDGET_EXPIRED);
+        assert(c.pc == CODE + sizeof(call) && c.sp == STACK + 4072U);
         /* Pre-decode fault: a fetch outside mapped memory leaves valid=0 and
          * an empty name; canonical CPU state is unchanged. */
         gem_x64_runtime_handler_trace_reset(r);
