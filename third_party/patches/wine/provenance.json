@@ -38,7 +38,7 @@
     {
       "order": 5,
       "path": "third_party/patches/wine/0005-arm64x-pass-mode-to-winebuild.patch",
-      "sha256": "ded6226ce7e7ac63a6beb5c26190a26654a8e99b6d048b0773e627fe4ee67263",
+      "sha256": "3bae1232d61d1bece50cc29e8f8ccf583f6c4eba6e534ac7a6cdf2b60555420f",
       "authoringCommit": "5b18ac6488e3fa5701d9fb8d20b77281e6c51da0",
       "purpose": "Pass ARM64X mode to Wine's spec-object generator and select each PE target's Clang triple so native ARM64 metadata is preserved."
     }

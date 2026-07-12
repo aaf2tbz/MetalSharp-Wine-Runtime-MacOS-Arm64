@@ -24,6 +24,7 @@ index 20ea512..2c4425a 100644
 +        if (is_pe_target( target )) add_clang_options( target_name, &ret );
          return ret;
      }
+ 
 @@ -1769,6 +1769,7 @@ int main(int argc, char **argv)
                      {
                          is_arm64x = true;
