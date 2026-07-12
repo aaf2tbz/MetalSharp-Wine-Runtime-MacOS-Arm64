@@ -50,9 +50,9 @@ $eb = Read-Evidence $EvidenceB $ManifestB $b
 $comparisons = [ordered]@{
     producerLock = @($a.producerLock, $b.producerLock)
     source = @((Canonical $a.source), (Canonical $b.source))
-    outputs = @((Canonical $a.outputs), (Canonical $b.outputs))
     dllSha256 = @($a.outputs.dll.sha256, $b.outputs.dll.sha256)
     hostSha256 = @($a.outputs.host.sha256, $b.outputs.host.sha256)
+    outputs = @((Canonical $a.outputs), (Canonical $b.outputs))
     parser = @((Canonical $ea.parser), (Canonical $eb.parser))
 }
 foreach ($name in $comparisons.Keys) {
