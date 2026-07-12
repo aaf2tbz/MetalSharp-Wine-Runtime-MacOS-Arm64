@@ -293,6 +293,18 @@ Proposed and no Milestone 5 checkbox changes until two clean CI
 producer builds cross the strict ephemeral handoff and pass the native macOS consumer end to end.
 Callbacks, nesting, general returns, and the broader path matrix remain Phase 4.
 
+CI run `29177433405` is the accepted Phase 3 evidence, but not the final ADR gate. Two clean native
+Windows ARM64 builds produced the same Microsoft-linked DLL SHA-256
+`975a2744099d9230a10b28cb046c092b619b498d0ed93a3d6f839ee187067b60`; the native oracle returned
+30 for input 12; the pre-existing checker/thunk prerequisite still passed through pinned Dynarmic;
+and the hash-bound one-day artifact passed the native macOS ARM64 consumer. That consumer executed
+100 identical authentic integer round trips, each retiring four linked x64 instructions through
+Blink, preserving the 720-byte context, x18/TEB, x87/MM and nonvolatile SIMD state, validating the
+aligned/original stack fields, balancing its frame/cookie, and matching the complete final context
+and touched stack page. Zero-Rosetta, interpreter-only, compiler, policy, provenance, leakage,
+memory-order, and page-isolation gates passed. ADR 0008 remains Proposed until Phase 4 callback,
+nesting, general-return, and negative hybrid paths satisfy the remaining checklist.
+
 Deterministic
 allocation-failure injection is not exposed by the pinned embedding or GEM allocator and is
 therefore explicitly unsupported in this increment; tests do not introduce nondeterministic host
