@@ -179,8 +179,9 @@ zero-Rosetta audits. Local Apple Clang ASan+UBSan passed the complete 15-test ma
 - [ ] Audit all packaged Mach-O files and launched processes for ARM64-only execution.
 - [ ] Produce and independently validate the deterministic package and publication assets defined in [`docs/release/integrated-wine-package.md`](docs/release/integrated-wine-package.md).
 - [ ] Publish immutable v0.1.0 assets from the protected final `main` commit through a least-privilege release job.
+- [ ] Replace README's development-status notice in the final merge with an accurate v0.1.0 status, supported scope, known-limitations link, release link, and evidence link; do not claim unaccepted acceleration, graphics, i386, or application support.
 
-**Exit gate:** all release acceptance criteria have links to CI runs, fixtures, test names, and architecture records; the protected-main workflow builds and exercises integrated Wine, then publishes the hash-bound `.tar.zst`, checksum, SBOM, provenance, limitations, and evidence assets.
+**Exit gate:** all release acceptance criteria have links to CI runs, fixtures, test names, and architecture records; the protected-main workflow builds and exercises integrated Wine, then publishes the hash-bound `.tar.zst`, checksum, SBOM, provenance, limitations, and evidence assets. The README on `main` reports the final supported v0.1.0 status and links to those published records rather than retaining the architecture-foundation notice.
 
 ## After v0.1
 

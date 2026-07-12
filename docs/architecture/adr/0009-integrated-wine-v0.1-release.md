@@ -25,6 +25,7 @@ The release gate requires all of the following:
 6. Packaging is deterministic and allowlisted. The primary asset is `metalsharp-wine-v0.1.0-macos-arm64.tar.zst`; checksums, SPDX SBOM, provenance, known limitations, and an evidence index are separate release assets and are also represented inside the archive where appropriate.
 7. Publication runs only for the protected `main` commit produced by the final Issue #15 merge. Pull requests may build and validate the candidate but receive no `contents: write` permission and cannot create a release.
 8. The publication job receives `contents: write` only after all build, integration-test, package-validation, and evidence gates succeed. The immutable `v0.1.0` tag and release must resolve to that exact tested commit.
+9. The final merge replaces README's development-status notice with an accurate v0.1.0 status and links to the release, known limitations, and evidence. It names only support demonstrated by release CI and continues to identify unaccepted acceleration, graphics, i386, and broader application coverage as out of scope.
 
 A runtime-only archive, a vanilla Wine build with adjacent unused libraries, a package made from a local worktree, or an archive lacking integration execution evidence fails closed.
 

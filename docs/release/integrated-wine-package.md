@@ -55,6 +55,8 @@ Two clean builds from the same source and declared toolchain must produce identi
 
 A premature manual dispatch fails. A normal `main` push without the record succeeds without building or publishing. Once the reviewed record is present, the same workflow run builds the candidate with read-only repository permission, hands it to the publication job through a one-day same-run artifact with an Actions service digest, revalidates it, reconfirms the exact current `main` head, and only then uses a separate `contents: write` job to create the release.
 
+The readiness record must also bind the final README status block. Before the record is admitted, README's current architecture-foundation notice is replaced with the accepted v0.1.0 status, supported scope, predictable `v0.1.0` release URL, known-limitations asset URL, and evidence asset URL. Release validation rejects either the old notice or claims beyond the tested support matrix. This README change lands through the same protected final merge; release automation never pushes an unreviewed documentation commit to `main`.
+
 ## Publication assets
 
 The GitHub `v0.1.0` release receives:
