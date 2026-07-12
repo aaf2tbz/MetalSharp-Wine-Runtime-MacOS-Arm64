@@ -1,0 +1,82 @@
+From ca996e6c89e1c13238cd6232199e711eda6a9869 Mon Sep 17 00:00:00 2001
+From: MetalSharp Build <build@metalsharp.invalid>
+Date: Sun, 12 Jul 2026 07:18:21 -0600
+Subject: [PATCH 1/1] arm64ec: avoid x86-only inline assembly
+
+---
+ include/winnt.h | 22 ++++++++++++++++------
+ 1 file changed, 16 insertions(+), 6 deletions(-)
+
+diff --git a/include/winnt.h b/include/winnt.h
+index 2dc1aad..9b97b3c 100644
+--- a/include/winnt.h
++++ b/include/winnt.h
+@@ -7719,7 +7719,7 @@ static FORCEINLINE LONG WINAPI InterlockedExchange( LONG volatile *dest, LONG va
+     LONG ret;
+ #if (__GNUC__ > 4) || ((__GNUC__ == 4) && (__GNUC_MINOR__ >= 7))
+     ret = __atomic_exchange_n( dest, val, __ATOMIC_SEQ_CST );
+-#elif defined(__i386__) || defined(__x86_64__)
++#elif defined(__i386__) || (defined(__x86_64__) && !defined(__arm64ec__))
+     __asm__ __volatile__( "lock; xchgl %0,(%1)"
+                           : "=r" (ret) :"r" (dest), "0" (val) : "memory" );
+ #else
+@@ -7733,7 +7733,7 @@ static FORCEINLINE char WINAPI InterlockedExchange8( char volatile *dest, char v
+     char ret;
+ #if (__GNUC__ > 4) || ((__GNUC__ == 4) && (__GNUC_MINOR__ >= 7))
+     ret = __atomic_exchange_n( dest, val, __ATOMIC_SEQ_CST );
+-#elif defined(__i386__) || defined(__x86_64__)
++#elif defined(__i386__) || (defined(__x86_64__) && !defined(__arm64ec__))
+     __asm__ __volatile__( "lock; xchgb %0,(%1)"
+                           : "=r" (ret) :"r" (dest), "0" (val) : "memory" );
+ #else
+@@ -7747,7 +7747,7 @@ static FORCEINLINE short WINAPI InterlockedExchange16( short volatile *dest, sho
+     short ret;
+ #if (__GNUC__ > 4) || ((__GNUC__ == 4) && (__GNUC_MINOR__ >= 7))
+     ret = __atomic_exchange_n( dest, val, __ATOMIC_SEQ_CST );
+-#elif defined(__i386__) || defined(__x86_64__)
++#elif defined(__i386__) || (defined(__x86_64__) && !defined(__arm64ec__))
+     __asm__ __volatile__( "lock; xchgw %0,(%1)"
+                           : "=r" (ret) :"r" (dest), "0" (val) : "memory" );
+ #else
+@@ -7811,7 +7811,7 @@ static FORCEINLINE void * WINAPI InterlockedExchangePointer( void *volatile *des
+     void *ret;
+ #if (__GNUC__ > 4) || ((__GNUC__ == 4) && (__GNUC_MINOR__ >= 7))
+     ret = __atomic_exchange_n( dest, val, __ATOMIC_SEQ_CST );
+-#elif defined(__x86_64__)
++#elif defined(__x86_64__) && !defined(__arm64ec__)
+     __asm__ __volatile__( "lock; xchgq %0,(%1)" : "=r" (ret) :"r" (dest), "0" (val) : "memory" );
+ #elif defined(__i386__)
+     __asm__ __volatile__( "lock; xchgl %0,(%1)" : "=r" (ret) :"r" (dest), "0" (val) : "memory" );
+@@ -8046,9 +8046,9 @@ static FORCEINLINE void WriteNoFence64( LONG64 volatile *dest, LONG64 value )
+ 
+ static FORCEINLINE DECLSPEC_NORETURN void __fastfail(unsigned int code)
+ {
+-#if defined(__x86_64__) || defined(__i386__)
++#if (defined(__x86_64__) && !defined(__arm64ec__)) || defined(__i386__)
+     for (;;) __asm__ __volatile__( "int $0x29" :: "c" ((ULONG_PTR)code) : "memory" );
+-#elif defined(__aarch64__)
++#elif defined(__aarch64__) || defined(__arm64ec__)
+     register ULONG_PTR val __asm__("x0") = code;
+     for (;;) __asm__ __volatile__( "brk #0xf003" :: "r" (val) : "memory" );
+ #elif defined(__arm__)
+@@ -8085,6 +8085,16 @@ static FORCEINLINE unsigned char InterlockedCompareExchange128( volatile __int64
+ 
+ #endif
+ 
++#if defined(__arm64ec__) && defined(__GNUC__)
++#define _InterlockedCompareExchange128_acq InterlockedCompareExchange128
++#define _InterlockedCompareExchange128_nf  InterlockedCompareExchange128
++#define _InterlockedCompareExchange128_rel InterlockedCompareExchange128
++#define _InterlockedAdd64_nf              InterlockedAdd64
++#define _InterlockedExchangeAdd_nf       InterlockedExchangeAdd
++#define _InterlockedOr_nf                InterlockedOr
++#define _InterlockedOr64_nf              InterlockedOr64
++#endif
++
+ #define InterlockedDecrementSizeT(a) InterlockedDecrement64((LONGLONG *)(a))
+ #define InterlockedExchangeAddSizeT(a, b) InterlockedExchangeAdd64((LONGLONG *)(a), (b))
+ #define InterlockedIncrementSizeT(a) InterlockedIncrement64((LONGLONG *)(a))
+-- 
+2.54.0 (Apple Git-157)
+
+

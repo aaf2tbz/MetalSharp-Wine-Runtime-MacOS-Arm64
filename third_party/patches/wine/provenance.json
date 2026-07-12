@@ -27,6 +27,13 @@
       "sha256": "5487bd8396fdced1c0eceb9d360e2607483582dcf3e8d7f5b6b5367b7031a674",
       "authoringCommit": "ad5e2e23360a566458f7854fb8e8fd296c8378cc",
       "purpose": "Place Darwin ARM64 Wine mappings, KUSER backing, and TEB allocations above the loader reservation."
+    },
+    {
+      "order": 4,
+      "path": "third_party/patches/wine/0004-arm64ec-avoid-x86-inline-assembly.patch",
+      "sha256": "40c03d0c22ddc3f281726a9152db3218ebe34606721397d62ac9f92906786a45",
+      "authoringCommit": "4d72445760a7d336f20f8a9db1672df6dbe67868",
+      "purpose": "Use ARM64EC-safe atomics and fast-fail instructions instead of x86-only inline assembly."
     }
   ],
   "researchEvidence": {

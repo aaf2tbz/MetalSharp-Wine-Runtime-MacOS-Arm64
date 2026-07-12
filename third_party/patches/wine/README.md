@@ -31,6 +31,9 @@ is not a release input.
    - moves Wine's host KUSER backing to `0x1007ffe0000`, which the packaged GEM
      bridge aliases to checked guest address `0x7ffe0000`;
    - removes the legacy below-2-GiB TEB placement constraint for this host.
+4. `0004-arm64ec-avoid-x86-inline-assembly.patch`
+   - keeps ARM64EC away from x86-only inline atomic and fast-fail assembly;
+   - uses the ARM64EC-safe compiler intrinsics and `brk` fast-fail sequence.
 
 ## Current evidence and limitation
 
