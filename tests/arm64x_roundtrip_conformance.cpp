@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "metalsharp/gem/arm64ec_target.h"
 #include "metalsharp/gem/context.h"
+#include "metalsharp/gem/context_conversion.h"
 #include "metalsharp/gem/hybrid_runtime.h"
 #include "metalsharp/gem/pe_arm64x_loader.h"
+#include "metalsharp/gem/x64_engine.h"
+#include "x64_engine_trace.h"
 
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <cstddef>
@@ -168,12 +172,75 @@ gem_thread_context initial_context(std::uint64_t caller) {
 struct PhaseBPath {
     const char *entry_name;
     std::uint32_t expected_stop_rva;
+    enum gem_stop_reason x64_reason;
+    std::uint64_t x64_retired;
+    std::uint32_t x64_handler_count;
+    std::uint32_t x64_handler_ids[4];
+    std::uint32_t x64_handler_rvas[4];
+    bool x64_stop_in_image;
+    std::uint32_t x64_stop_rva;
+    bool x64_decode_valid;
+    std::uint32_t x64_decode_handler_id;
+    const char *x64_decode_name;
 };
+/* Authentic decoder-owned x64 evidence pinned against pinned Blink's own decode
+ * dispatch.  LEA (0x8d -> OpLeaGvqpM) and CALL (0xe8 -> OpCallJvds) are outside
+ * the reviewed 9-handler allowlist, so the probe stops at those boundaries
+ * instead of guessing callback/tail/nesting semantics.  Only OpAlui/
+ * OpMovGvqpEvqp/OpRet retire.  Ids match GemHandlerId(): OpAlui=6,
+ * OpMovGvqpEvqp=4, OpRet=9.  The decoder-attempt fields carry Blink's own
+ * DescribeMopcode() identity for the unsupported boundary that produced the
+ * stop; CALL uses the exact Blink result "OpCallJvds" rather than any
+ * locally-named substitute. */
 constexpr std::array<PhaseBPath, 4> kPhaseBPaths = {{
-    {"direct", UINT32_C(0x4080)},
-    {"callbackResume", UINT32_C(0x4020)},
-    {"tailTransfer", UINT32_C(0x4090)},
-    {"boundedNested", UINT32_C(0x4060)},
+    {"direct",
+     UINT32_C(0x4080),
+     GEM_STOP_UNSUPPORTED_INSTRUCTION,
+     0U,
+     0U,
+     {0, 0, 0, 0},
+     {0, 0, 0, 0},
+     true,
+     UINT32_C(0x4080),
+     true,
+     0U,
+     "OpLeaGvqpM"},
+    {"callbackResume",
+     UINT32_C(0x4020),
+     GEM_STOP_UNSUPPORTED_INSTRUCTION,
+     2U,
+     2U,
+     {6, 6, 0, 0},
+     {0x4020, 0x4024, 0, 0},
+     true,
+     UINT32_C(0x4028),
+     true,
+     0U,
+     "OpCallJvds"},
+    {"tailTransfer",
+     UINT32_C(0x4090),
+     GEM_STOP_HOST_RETURN,
+     3U,
+     3U,
+     {6, 4, 9, 0},
+     {0x4090, 0x4097, 0x409A, 0},
+     false,
+     0U,
+     true,
+     9U,
+     "OpRet"},
+    {"boundedNested",
+     UINT32_C(0x4060),
+     GEM_STOP_UNSUPPORTED_INSTRUCTION,
+     2U,
+     2U,
+     {6, 6, 0, 0},
+     {0x4060, 0x4064, 0, 0},
+     true,
+     UINT32_C(0x4068),
+     true,
+     0U,
+     "OpCallJvds"},
 }};
 constexpr std::uint64_t kPhaseBLoadedBase = UINT64_C(0x180000000);
 constexpr std::uint64_t kPhaseBExpectedRetired = UINT64_C(17);
@@ -232,12 +299,162 @@ std::uint64_t fnv1a(const std::uint8_t *data, std::size_t size) {
     return hash;
 }
 
+/* Decoder-owned x64 segment evidence.  Each authentic first-boundary x64 target
+ * is stepped one deterministic instruction at a time through the pinned Blink
+ * adapter.  The handler sequence is Blink's own decode-dispatch identity (never
+ * a second decoder or opcode scanner).  We stop at the exact unsupported or
+ * return/host boundary Blink reports and never emulate callback/nesting. */
+constexpr std::uint64_t kX64EvidenceStack = UINT64_C(0x0000000600000000);
+constexpr std::uint64_t kX64EvidenceStackSize = UINT64_C(0x1000);
+constexpr std::uint64_t kX64SegmentSentinel = UINT64_C(0xFFFFFFFFFFFFFA00);
+constexpr unsigned kX64SegmentStepLimit = 16U;
+
+struct X64SegmentEvidence {
+    enum gem_stop_reason reason {};
+    std::uint64_t stop_pc{};
+    std::uint32_t stop_rva{};
+    bool stop_in_image{};
+    std::uint64_t retired{};
+    std::vector<std::pair<std::uint64_t, std::uint32_t>> handlers;
+    std::uint32_t overflow{};
+    std::uint64_t fault_address{};
+    unsigned access{};
+    std::uint32_t memory_error{};
+    std::uint32_t engine_status{};
+    std::uint64_t cpu_hash{};
+    std::uint64_t stack_hash{};
+    std::uint64_t code_hash{};
+    bool decode_valid{};
+    std::uint64_t decode_rip{};
+    std::uint32_t decode_handler_id{};
+    std::string decode_name{};
+};
+
+X64SegmentEvidence probe_x64_segment(gem_memory *memory, const gem_pe_arm64x_image *metadata,
+                                     std::uint64_t entry_va, std::uint64_t base) {
+    X64SegmentEvidence evidence;
+    /* Deterministic scratch stack: zero-filled, with the segment return sentinel
+     * at the initial rsp so a genuine x64 RET lands on a controlled host-return
+     * boundary rather than an undefined address. */
+    std::array<std::uint8_t, kX64EvidenceStackSize> zero{};
+    assert(gem_memory_write(memory, kX64EvidenceStack, zero.data(), zero.size()) == GEM_MEMORY_OK);
+    const auto initial_sp = kX64EvidenceStack + kX64EvidenceStackSize - UINT64_C(0x100);
+    std::uint64_t sentinel = kX64SegmentSentinel;
+    assert(gem_memory_write(memory, initial_sp, &sentinel, sizeof(sentinel)) == GEM_MEMORY_OK);
+
+    gem_x64_runtime_config config{};
+    config.host_return_sentinel = kX64SegmentSentinel;
+    config.max_budget = kX64SegmentStepLimit;
+    auto *runtime = gem_x64_runtime_create(memory, &config);
+    assert(runtime);
+    gem_x64_runtime_handler_trace_reset(runtime);
+
+    gem_thread_context context{};
+    gem_context_initialize(&context, UINT64_C(0x70000000), GEM_ISA_X64);
+    context.pc = entry_va;
+    context.sp = initial_sp;
+    context.x64_rflags = 2U;
+    context.x64_mxcsr = 0x1f80U;
+    context.x64_fcw = 0x37fU;
+
+    enum gem_stop_reason reason = GEM_STOP_BUDGET_EXPIRED;
+    std::uint64_t retired = 0;
+    for (unsigned step = 0; step < kX64SegmentStepLimit; ++step) {
+        reason = gem_x64_runtime_run(runtime, &context, 1U);
+        gem_x64_stop_info info{};
+        assert(gem_x64_runtime_last_stop_info(runtime, &info) && info.reason == reason &&
+               info.instructions_retired <= 1U);
+        retired += info.instructions_retired;
+        evidence.fault_address = info.fault_address;
+        evidence.access = static_cast<unsigned>(info.access);
+        evidence.memory_error = info.memory_error;
+        evidence.engine_status = info.engine_status;
+        if (reason != GEM_STOP_BUDGET_EXPIRED)
+            break;
+        context.stop_reason = GEM_STOP_NONE;
+    }
+    evidence.reason = reason;
+    evidence.retired = retired;
+    evidence.stop_pc = context.pc;
+
+    std::uint32_t count = 0U;
+    std::uint32_t overflow = 0U;
+    assert(gem_x64_runtime_handler_trace_info(runtime, &count, &overflow));
+    evidence.overflow = overflow;
+    for (std::uint32_t index = 0U; index < count; ++index) {
+        std::uint64_t rip = 0U;
+        std::uint32_t handler_id = 0U;
+        assert(gem_x64_runtime_handler_trace_read(runtime, index, &rip, &handler_id));
+        assert(handler_id != 0U);
+        evidence.handlers.emplace_back(rip, handler_id);
+    }
+    /* One decoder-owned handler entry per retired instruction, and no more. */
+    assert(count == retired);
+    assert(!gem_x64_runtime_handler_trace_read(runtime, count, nullptr, nullptr));
+
+    gem_pe_arm64x_rva_info stop_info{};
+    if (evidence.stop_pc >= base && evidence.stop_pc - base <= UINT32_MAX &&
+        gem_pe_arm64x_classify_rva(metadata, static_cast<std::uint32_t>(evidence.stop_pc - base),
+                                   &stop_info) == GEM_PE_OK) {
+        evidence.stop_in_image = true;
+        evidence.stop_rva = static_cast<std::uint32_t>(evidence.stop_pc - base);
+    }
+
+    std::array<std::uint8_t, 8U + 8U + 31U * 8U + 8U> cpu{};
+    std::size_t cursor = 0U;
+    auto put = [&cpu, &cursor](std::uint64_t value) {
+        for (unsigned byte = 0U; byte < 8U; ++byte)
+            cpu[cursor++] = static_cast<std::uint8_t>(value >> (byte * 8U));
+    };
+    put(context.pc);
+    put(context.sp);
+    for (unsigned index = 0U; index < 31U; ++index)
+        put(context.x[index]);
+    put(context.x64_rflags);
+    evidence.cpu_hash = fnv1a(cpu.data(), cpu.size());
+
+    std::array<std::uint8_t, kX64EvidenceStackSize> stack{};
+    assert(gem_memory_read(memory, kX64EvidenceStack, stack.data(), stack.size()) == GEM_MEMORY_OK);
+    evidence.stack_hash = fnv1a(stack.data(), stack.size());
+    std::array<std::uint8_t, 64U> code{};
+    assert(gem_memory_read(memory, entry_va, code.data(), code.size()) == GEM_MEMORY_OK);
+    evidence.code_hash = fnv1a(code.data(), code.size());
+
+    /* Decoder-owned last-decode-attempt: Blink's own Mopcode()/DescribeMopcode()
+     * identity for the exact instruction that produced the stop.  Reading is
+     * a side-effect-free diagnostic; the wrapper never alters execution or
+     * allowlisting. */
+    blink_gem_decode_attempt attempt{};
+    attempt.abi_version = BLINK_GEM_DECODE_ATTEMPT_ABI_VERSION;
+    attempt.size = sizeof(attempt);
+    if (gem_x64_runtime_decode_attempt_info(runtime, &attempt)) {
+        evidence.decode_valid = attempt.valid != 0U;
+        evidence.decode_rip = attempt.rip;
+        evidence.decode_handler_id = attempt.handler_id;
+        std::array<char, BLINK_GEM_DECODE_ATTEMPT_NAME_BYTES> bounded{};
+        for (std::size_t index = 0; index < bounded.size(); ++index)
+            bounded[index] = attempt.name[index];
+        const auto terminator = std::find(bounded.begin(), bounded.end(), '\0');
+        evidence.decode_name.assign(bounded.data(),
+                                    static_cast<std::size_t>(terminator - bounded.begin()));
+    }
+
+    gem_x64_runtime_destroy(runtime);
+    return evidence;
+}
+
 void write_phase_b_trace(const char *path, Harness &harness,
                          const std::map<std::string, std::uint32_t> &entries,
                          const gem_pe_arm64x_image *metadata) {
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
     assert(out);
-    out << "{\n  \"schema\":\"mswr.phase-b.execution-evidence.v1\",\n  \"paths\":[\n";
+    out << "{\n  \"schema\":\"mswr.phase-b.execution-evidence.v2\",\n  \"paths\":[\n";
+    /* Deterministic scratch stack for authentic x64 segment stepping, distinct
+     * from the ARM64EC round-trip stack so the two probes never interfere. */
+    std::uint64_t x64_stack = kX64EvidenceStack;
+    assert(gem_memory_reserve(harness.memory, &x64_stack, kX64EvidenceStackSize) == GEM_MEMORY_OK);
+    assert(gem_memory_commit(harness.memory, x64_stack, kX64EvidenceStackSize,
+                             GEM_PAGE_READWRITE) == GEM_MEMORY_OK);
     /* Hash the entire reserved guest stack region (a single fixed checked range)
      * rather than a window relative to context.sp, which may legitimately move
      * across runs and would otherwise sample different pages. */
@@ -299,6 +516,33 @@ void write_phase_b_trace(const char *path, Harness &harness,
         assert(stop_rva == expected_stop_rva);
         assert(stop.instructions_retired == kPhaseBExpectedRetired);
 
+        /* Authentic decoder-owned x64 segment evidence: step Blink from the
+         * first x64 boundary one deterministic segment at a time. */
+        const auto segment =
+            probe_x64_segment(harness.memory, metadata, stop_va, kPhaseBLoadedBase);
+        const auto &expected = kPhaseBPaths[i];
+        assert(segment.reason == expected.x64_reason);
+        assert(segment.retired == expected.x64_retired);
+        assert(!segment.overflow);
+        assert(segment.handlers.size() == expected.x64_handler_count);
+        for (std::size_t h = 0; h < segment.handlers.size(); ++h) {
+            assert(segment.handlers[h].second == expected.x64_handler_ids[h]);
+            assert(segment.handlers[h].first == kPhaseBLoadedBase + expected.x64_handler_rvas[h]);
+        }
+        assert(segment.stop_in_image == expected.x64_stop_in_image);
+        if (expected.x64_stop_in_image)
+            assert(segment.stop_rva == expected.x64_stop_rva);
+        else
+            assert(segment.stop_pc == kX64SegmentSentinel);
+
+        /* Decoder-owned last-decode-attempt: Blink's own DescribeMopcode()
+         * result for the exact unsupported boundary that produced the stop.
+         * The CALL entry asserts Blink's actual "OpCallJvds" mnemonic, never
+         * a locally-named substitute. */
+        assert(segment.decode_valid == expected.x64_decode_valid);
+        assert(segment.decode_handler_id == expected.x64_decode_handler_id);
+        assert(segment.decode_name == std::string(expected.x64_decode_name));
+
         /* Deterministic, allocation-free-of-fixed-sizes JSON via std::ostringstream.
          * Field order is fixed; numeric bases and widths are fixed. */
         std::ostringstream os;
@@ -337,6 +581,36 @@ void write_phase_b_trace(const char *path, Harness &harness,
         os << ",\"stackHashAfter\":\"" << hex_u64(fnv1a(stack_after.data(), kStackSize)) << '"';
         os << ",\"initialSp\":" << hex_u64_quoted(initial_sp);
         os << ",\"finalSp\":" << hex_u64_quoted(final_sp);
+        os << ",\"x64Entry\":" << hex_u64_quoted(stop_va);
+        os << ",\"x64StopReason\":\"" << gem_stop_reason_name(segment.reason) << '"';
+        os << ",\"x64StopPc\":" << hex_u64_quoted(segment.stop_pc);
+        os << ",\"x64StopInImage\":" << (segment.stop_in_image ? "true" : "false");
+        if (segment.stop_in_image)
+            os << ",\"x64StopRva\":\"" << hex_u64(segment.stop_rva, 8) << '"';
+        os << ",\"x64Retired\":" << dec_u64(segment.retired);
+        os << ",\"x64DecoderHandlers\":[";
+        for (std::size_t h = 0; h < segment.handlers.size(); ++h) {
+            if (h != 0)
+                os << ',';
+            os << "{\"rip\":" << hex_u64_quoted(segment.handlers[h].first);
+            os << ",\"id\":" << segment.handlers[h].second;
+            os << ",\"name\":\"" << gem_x64_runtime_handler_name(segment.handlers[h].second)
+               << "\"}";
+        }
+        os << ']';
+        os << ",\"x64DecoderTraceOverflow\":" << (segment.overflow ? "true" : "false");
+        os << ",\"x64FaultAddress\":" << hex_u64_quoted(segment.fault_address);
+        os << ",\"x64Access\":" << segment.access;
+        os << ",\"x64MemoryError\":" << segment.memory_error;
+        os << ",\"x64EngineStatus\":" << segment.engine_status;
+        os << ",\"x64CpuHash\":\"" << hex_u64(segment.cpu_hash) << '"';
+        os << ",\"x64StackHash\":\"" << hex_u64(segment.stack_hash) << '"';
+        os << ",\"x64CodeHash\":\"" << hex_u64(segment.code_hash) << '"';
+        os << ",\"x64DecodeAttempt\":{";
+        os << "\"valid\":" << (segment.decode_valid ? "true" : "false");
+        os << ",\"rip\":" << hex_u64_quoted(segment.decode_rip);
+        os << ",\"handlerId\":" << segment.decode_handler_id;
+        os << ",\"name\":\"" << segment.decode_name << "\"}";
         os << '}';
         if (i + 1 != kPhaseBPaths.size())
             os << ',';

@@ -101,6 +101,6 @@ const char *gem_x64_runtime_engine_license(const struct gem_x64_runtime *r) {
 const char *gem_x64_runtime_engine_provenance(const struct gem_x64_runtime *r) {
     return r ? "jart/blink@f006a4fc6f9b8de9272504fdff0dbbe5ce5dc580;real-interpreter;"
                "DISABLE_JIT;patch-sha256="
-               "5db0ef0f144fe0df014496fe521e0640659f7dd44cfbb3e79defa7fb503551a6"
+               "f3bbf69d305265dd63e7f30bffe22d1046c7e7144e7028098de502e4f6bd2637"
              : "unavailable";
 }

@@ -253,7 +253,8 @@ if(BUILD_TESTING)
     if(MSWR_X64_ENGINE_CONFORMANCE)
         add_executable(x64_engine_conformance tests/x64_engine_conformance.cpp)
         target_link_libraries(x64_engine_conformance PRIVATE metalsharp_gem)
-        target_include_directories(x64_engine_conformance PRIVATE "${blink_gem_SOURCE_DIR}")
+        target_include_directories(x64_engine_conformance PRIVATE "${blink_gem_SOURCE_DIR}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/gem")
         target_compile_features(x64_engine_conformance PRIVATE cxx_std_17)
         mswr_enable_warnings(x64_engine_conformance)
         add_test(NAME gem.x64_engine_conformance COMMAND x64_engine_conformance)
@@ -273,6 +274,8 @@ if(BUILD_TESTING)
         endif()
         add_executable(arm64x_roundtrip_conformance tests/arm64x_roundtrip_conformance.cpp)
         target_link_libraries(arm64x_roundtrip_conformance PRIVATE metalsharp_gem)
+        target_include_directories(arm64x_roundtrip_conformance PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/gem" "${blink_gem_SOURCE_DIR}")
         target_compile_features(arm64x_roundtrip_conformance PRIVATE cxx_std_17)
         mswr_enable_warnings(arm64x_roundtrip_conformance)
         add_test(NAME gem.arm64x_roundtrip COMMAND arm64x_roundtrip_conformance

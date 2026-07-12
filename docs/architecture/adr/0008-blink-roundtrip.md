@@ -262,6 +262,21 @@ the canonical context across transient x64 synchronization; GEM does not infer o
 x9-x12, x15-x17, or LR into x87 slots. Handlers not proven independent of x87/MM fail closed before
 execution.
 
+In addition to the allowlist, the adapter exposes two diagnostic surfaces that are sourced
+exclusively from Blink's own decode dispatch (`GetOp(Mopcode(rde))` plus `DescribeMopcode()` in
+`blink/name.c`) and never alter execution, allowlisting, or committed architectural state. The
+retired-handler trace is a machine-owned, bounded (`256`-entry), sticky-overflow, non-wrapping array
+of `GemHandlerId(GetOp(Mopcode(rde)))` ids and RIPs, with exactly one entry appended per retired
+instruction and nothing for unsupported / faulted / pre-decode outcomes. The decoder-owned "last
+decode attempt" record is reset on every step, populated only after a successful `LoadInstruction`,
+and carries Blink's own `Mopcode(rde)`, the `DescribeMopcode()` mnemonic, and the `GemHandlerId()`
+allowlist id (or `0` when the selected handler is outside the reviewed manifest — e.g. LEA `0x8d`
+↦ `OpLeaGvqpM`, CALL `0xe8` ↦ `OpCallJvds`). Both records are queried through private wrapper
+functions with explicit `abi_version` / `size` validation; trace storage is runtime-owned while
+decode-attempt records are copied into caller-owned storage. The provenance `handlerTrace` and
+`decodeAttempt` blocks pin their capacity,
+identity source, and overflow semantics.
+
 The interpreter owns no decoded-code or JIT cache: its bounded page shadow is refreshed before
 each instruction. `gem_x64_runtime_invalidate_code` is therefore deliberately a no-op in this
 backend, and self-modifying-code conformance proves that the next step sees changed bytes. A future
