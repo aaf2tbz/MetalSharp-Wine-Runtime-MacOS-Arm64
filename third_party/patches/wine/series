@@ -1,0 +1,5 @@
+0001-darwin-arm64-preserve-4g-pagezero.patch
+0002-darwin-arm64-keep-installed-wrapper.patch
+0003-darwin-arm64-high-guest-mappings.patch
+0004-arm64ec-avoid-x86-inline-assembly.patch
+0005-arm64x-pass-mode-to-winebuild.patch
