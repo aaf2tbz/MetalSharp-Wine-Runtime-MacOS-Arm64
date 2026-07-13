@@ -39,6 +39,7 @@ jobs:
           tools/ci/test-check-repository.py
           tools/ci/validate-arm64x-issue14-artifact.py
           tools/ci/validate-blink-tso-evidence.py
+          tools/release/repackage-published-runtime.py
           tools/release/validate-release-assets.py
           tools/release/validate-readiness.py
           tools/release/validate-wine-patches.py

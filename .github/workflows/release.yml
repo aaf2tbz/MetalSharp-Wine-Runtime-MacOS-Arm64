@@ -1,113 +1,185 @@
-name: Verify uploaded Wine release
+name: Publish release from a protected-main version bump
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - release/current.json
+      - release/runtime-overlay/**
+      - tools/release/repackage-published-runtime.py
+      - tools/release/validate-release-assets.py
+      - tools/release/verify-published-release.py
+      - .github/workflows/release.yml
+      - .github/workflows/release-verify.yml
 
 permissions:
-  contents: read
+  contents: write
+  actions: write
 
 concurrency:
-  group: integrated-wine-v0.1.0
+  group: release-publish-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  verify-and-publish:
-    name: Download, unpack, test, and publish v0.1.0
-    runs-on: macos-15
-    timeout-minutes: 30
-    permissions:
-      contents: write
+  resolve-version-bump:
+    name: Resolve a new release version
+    runs-on: ubuntu-24.04
+    outputs:
+      publish: ${{ steps.resolve.outputs.publish }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      version: ${{ steps.resolve.outputs.version }}
+      previous_tag: ${{ steps.resolve.outputs.previous_tag }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 2
           persist-credentials: false
-      - name: Bind the draft to reviewed protected main
+      - id: resolve
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          test "$GITHUB_REF" = refs/heads/main
-          test "$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)" = "$GITHUB_SHA"
-          test "$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v0.1.0" --jq .object.sha)" = "$GITHUB_SHA"
-          gh release view v0.1.0 --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft | grep -Fx true
-          python3 tools/release/validate-readiness.py \
-            --root "$GITHUB_WORKSPACE" \
-            --protected-main-parent "$(git rev-parse "$GITHUB_SHA^")"
-      - name: Download and verify the uploaded archive
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+
+          output = os.environ["GITHUB_OUTPUT"]
+          current = json.load(open("release/current.json", encoding="utf-8"))
+          required = {"schema", "version", "tag", "previousTag", "runtimeOverlay"}
+          version = current.get("version")
+          tag = current.get("tag")
+          if (set(current) != required or current.get("schema") != 1 or
+                  not isinstance(version, str) or
+                  not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?", version) or
+                  tag != f"v{version}" or not isinstance(current.get("runtimeOverlay"), str)):
+              raise SystemExit("release/current.json is not a valid release specification")
+          try:
+              previous = json.loads(subprocess.check_output(
+                  ["git", "show", "HEAD^:release/current.json"], text=True))
+          except subprocess.CalledProcessError:
+              previous = None
+          values = {"publish": "false", "tag": tag, "version": version, "previous_tag": ""}
+          if previous is not None:
+              old_tag = previous.get("tag")
+              if tag != old_tag:
+                  if current.get("previousTag") != old_tag:
+                      raise SystemExit("a version bump must name the immediately previous release tag")
+                  if subprocess.run(["gh", "release", "view", tag, "--repo", os.environ["GITHUB_REPOSITORY"]],
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
+                      raise SystemExit(f"refusing to overwrite immutable published release {tag}")
+                  values.update({"publish": "true", "previous_tag": old_tag})
+          with open(output, "a", encoding="utf-8") as stream:
+              for key, value in values.items():
+                  print(f"{key}={value}", file=stream)
+          PY
+
+  repackage-and-publish:
+    name: Verify, repackage, and publish the bumped release
+    needs: resolve-version-bump
+    if: needs.resolve-version-bump.outputs.publish == 'true'
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Download and verify the previous published bundle
         env:
           GH_TOKEN: ${{ github.token }}
+          PREVIOUS_TAG: ${{ needs.resolve-version-bump.outputs.previous_tag }}
         shell: bash
         run: |
           set -euo pipefail
-          assets="${RUNNER_TEMP}/metalsharp-wine-v0.1.0-assets"
-          mkdir -p "$assets"
-          gh release download v0.1.0 --repo "$GITHUB_REPOSITORY" --dir "$assets"
-          test "$(find "$assets" -type f | wc -l | tr -d ' ')" = 7
-          gh release view v0.1.0 --repo "$GITHUB_REPOSITORY" --json body --jq .body \
-            > "$assets/RELEASE-NOTES.md"
-          cd "$assets"
-          shasum -a 256 -c metalsharp-wine-v0.1.0-macos-arm64.tar.zst.sha256
-          python3 "$GITHUB_WORKSPACE/tools/release/validate-release-assets.py" \
-            --directory "$assets" --repository "$GITHUB_REPOSITORY" \
-            --commit "$GITHUB_SHA" --version 0.1.0
-          python3 "$GITHUB_WORKSPACE/tools/release/verify-published-release.py" \
-            --directory "$assets" --repository "$GITHUB_REPOSITORY" \
-            --tag v0.1.0 --commit "$GITHUB_SHA"
-      - name: Unpack at the accepted Wine build path and run checks
+          previous_version="${PREVIOUS_TAG#v}"
+          archive="metalsharp-wine-v${previous_version}-macos-arm64.tar.zst"
+          base="${RUNNER_TEMP}/previous-release-assets"
+          mkdir -p "$base"
+          gh release download "$PREVIOUS_TAG" --repo "$GITHUB_REPOSITORY" --dir "$base"
+          gh release view "$PREVIOUS_TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body \
+            > "$base/RELEASE-NOTES.md"
+          previous_commit="$(gh release view "$PREVIOUS_TAG" --repo "$GITHUB_REPOSITORY" \
+            --json targetCommitish --jq .targetCommitish)"
+          (
+            cd "$base"
+            shasum -a 256 -c "$archive.sha256"
+          )
+          python3 tools/release/validate-release-assets.py --directory "$base" \
+            --repository "$GITHUB_REPOSITORY" --commit "$previous_commit" --version "$previous_version"
+      - name: Unpack and apply the reviewed runtime overlay
+        env:
+          PREVIOUS_TAG: ${{ needs.resolve-version-bump.outputs.previous_tag }}
         shell: bash
         run: |
           set -euo pipefail
           brew install zstd
-          assets="${RUNNER_TEMP}/metalsharp-wine-v0.1.0-assets"
-          release_user=averyfelts
-          parent="/Users/${release_user}/Arm64WINE/.issue23"
-          runtime="$parent/stage"
-          sudo mkdir -p "$parent"
-          sudo chown -R "$(id -u):$(id -g)" "/Users/${release_user}"
-          "$(brew --prefix zstd)/bin/zstd" -d --stdout \
-            "$assets/metalsharp-wine-v0.1.0-macos-arm64.tar.zst" | tar -xf - -C "$parent"
-          mv "$parent/metalsharp-wine-v0.1.0-macos-arm64" "$runtime"
-          python3 tools/release/audit-runtime.py --root "$runtime"
-          for attempt in 1 2 3; do
-            evidence="${RUNNER_TEMP}/published-smoke-evidence-${attempt}"
-            echo "Required clean-prefix run ${attempt}/3"
-            if ! python3 tools/release/test-packaged-runtime.py \
-              --runtime "$runtime" \
-              --evidence "$evidence" \
-              --stress-iterations 1 \
-              --timeout 300; then
-              sw_vers
-              uname -m
-              file "$runtime/bin/wine" "$runtime/lib/wine/aarch64-unix/ntdll.so"
-              vtool -show-build "$runtime/bin/wine"
-              vtool -show-build "$runtime/lib/wine/aarch64-unix/ntdll.so"
-              otool -L "$runtime/bin/wine"
-              otool -L "$runtime/lib/wine/aarch64-unix/ntdll.so"
-              codesign --verify --strict --verbose=2 "$runtime/bin/wine"
-              codesign --verify --strict --verbose=2 "$runtime/lib/wine/aarch64-unix/ntdll.so"
-              while IFS= read -r logfile; do
-                echo "::group::$(basename "$(dirname "$logfile")")/$(basename "$logfile")"
-                cat "$logfile"
-                echo "::endgroup::"
-              done < <(find "${RUNNER_TEMP}" -maxdepth 2 -type f \
-                -path '*/published-smoke-evidence-*/*.log' -print | sort)
-              while IFS= read -r readiness; do
-                echo "::group::$(basename "$(dirname "$readiness")")/$(basename "$readiness")"
-                cat "$readiness"
-                echo "::endgroup::"
-              done < <(find "${RUNNER_TEMP}" -maxdepth 2 -type f \
-                -path '*/published-smoke-evidence-*/wineboot-prefix-readiness.json' -print | sort)
-              exit 1
-            fi
-          done
-      - name: Publish the verified unchanged draft
-        env:
-          GH_TOKEN: ${{ github.token }}
+          previous_version="${PREVIOUS_TAG#v}"
+          archive="metalsharp-wine-v${previous_version}-macos-arm64.tar.zst"
+          base="${RUNNER_TEMP}/previous-release-assets"
+          root="${RUNNER_TEMP}/published-runtime"
+          mkdir -p "$root"
+          "$(brew --prefix zstd)/bin/zstd" -d --stdout "$base/$archive" | tar -xf - -C "$root"
+          runtime="$root/metalsharp-wine-v${previous_version}-macos-arm64"
+          overlay="$GITHUB_WORKSPACE/$(python3 -c 'import json; print(json.load(open("release/current.json"))["runtimeOverlay"])')"
+          if [[ -d "$overlay" ]]; then
+            python3 - "$overlay" <<'PY'
+          import os
+          import sys
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          for path in root.rglob("*"):
+              relative = path.relative_to(root)
+              if ".." in relative.parts:
+                  raise SystemExit(f"unsafe overlay path: {relative}")
+              if path.is_symlink():
+                  target = os.readlink(path)
+                  if os.path.isabs(target) or ".." in Path(target).parts:
+                      raise SystemExit(f"unsafe overlay symlink: {relative}")
+          PY
+            rsync -a --safe-links "$overlay/" "$runtime/"
+          fi
+          printf 'RUNTIME=%s\n' "$runtime" >> "$GITHUB_ENV"
+          printf 'BASE_ASSETS=%s\n' "$base" >> "$GITHUB_ENV"
+      - name: Audit and smoke-test the updated runtime
         shell: bash
         run: |
           set -euo pipefail
-          test "$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)" = "$GITHUB_SHA"
-          test "$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v0.1.0" --jq .object.sha)" = "$GITHUB_SHA"
-          gh release edit v0.1.0 --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          python3 tools/release/audit-runtime.py --root "$RUNTIME"
+          python3 tools/release/test-packaged-runtime.py --runtime "$RUNTIME" \
+            --evidence "${RUNNER_TEMP}/release-bump-evidence" --stress-iterations 1 --timeout 300
+      - name: Create and validate immutable release assets
+        env:
+          VERSION: ${{ needs.resolve-version-bump.outputs.version }}
+          PREVIOUS_TAG: ${{ needs.resolve-version-bump.outputs.previous_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          assets="${RUNNER_TEMP}/new-release-assets"
+          epoch="$(git log -1 --format=%ct "$GITHUB_SHA")"
+          python3 tools/release/repackage-published-runtime.py --runtime "$RUNTIME" \
+            --base-assets "$BASE_ASSETS" --test-summary "${RUNNER_TEMP}/release-bump-evidence/summary.json" \
+            --output "$assets" --repository "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" \
+            --version "$VERSION" --previous-tag "$PREVIOUS_TAG" --source-date-epoch "$epoch"
+          python3 tools/release/validate-release-assets.py --directory "$assets" \
+            --repository "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" --version "$VERSION"
+          printf 'RELEASE_ASSETS=%s\n' "$assets" >> "$GITHUB_ENV"
+      - name: Publish the immutable release and dispatch its fresh-download verifier
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.resolve-version-bump.outputs.tag }}
+          VERSION: ${{ needs.resolve-version-bump.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="metalsharp-wine-v${VERSION}-macos-arm64.tar.zst"
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "MetalSharp Wine $TAG" --notes-file "$RELEASE_ASSETS/RELEASE-NOTES.md" \
+            "$RELEASE_ASSETS/$archive" "$RELEASE_ASSETS/$archive.sha256" \
+            "$RELEASE_ASSETS/release-manifest.json" "$RELEASE_ASSETS/wine-integration-evidence.json" \
+            "$RELEASE_ASSETS/sbom.spdx.json" "$RELEASE_ASSETS/evidence-index.json" \
+            "$RELEASE_ASSETS/KNOWN-LIMITATIONS.md"
+          gh workflow run release-verify.yml --repo "$GITHUB_REPOSITORY" --ref main -f tag="$TAG"

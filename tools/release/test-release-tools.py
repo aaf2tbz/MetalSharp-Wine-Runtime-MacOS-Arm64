@@ -46,13 +46,14 @@ def write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
 
 
-def make_candidate(directory: Path) -> None:
+def make_candidate(directory: Path, version: str = VERSION) -> None:
+    archive = f"metalsharp-wine-v{version}-macos-arm64.tar.zst"
     package = directory / "package-tree"
     (package / "bin").mkdir(parents=True)
     (package / "bin/wine").write_bytes(b"test launcher\n")
     (package / "bin/wine").chmod(0o755)
     tar_path = directory / "candidate.tar"
-    top = "metalsharp-wine-v0.1.0-macos-arm64"
+    top = f"metalsharp-wine-v{version}-macos-arm64"
     with tarfile.open(tar_path, "w", format=tarfile.PAX_FORMAT) as value:
         for path, name in ((package, top), (package / "bin", f"{top}/bin"),
                            (package / "bin/wine", f"{top}/bin/wine")):
@@ -68,17 +69,17 @@ def make_candidate(directory: Path) -> None:
                 value.addfile(info)
     zstd = shutil.which("zstd") or "/opt/homebrew/opt/zstd/bin/zstd"
     subprocess.run([zstd, "-1", "--threads=1", "--force", str(tar_path),
-                    "-o", str(directory / ARCHIVE)], check=True, stdout=subprocess.DEVNULL)
+                    "-o", str(directory / archive)], check=True, stdout=subprocess.DEVNULL)
     shutil.rmtree(package)
     tar_path.unlink()
-    archive_hash = digest(directory / ARCHIVE)
-    (directory / f"{ARCHIVE}.sha256").write_text(
-        f"{archive_hash}  {ARCHIVE}\n", encoding="ascii")
+    archive_hash = digest(directory / archive)
+    (directory / f"{archive}.sha256").write_text(
+        f"{archive_hash}  {archive}\n", encoding="ascii")
     integration = {
         "schema": 1,
         "repository": REPOSITORY,
         "commit": COMMIT,
-        "version": VERSION,
+        "version": version,
         "passed": True,
         "wineEngineIntegrated": True,
         "zeroRosetta": True,
@@ -98,14 +99,14 @@ def make_candidate(directory: Path) -> None:
         "schema": 1,
         "repository": REPOSITORY,
         "commit": COMMIT,
-        "version": VERSION,
+        "version": version,
         "criteria": [{"id": "integrated-wine", "passed": True, "evidence": ["wine-integration-evidence.json"]}],
     })
     (directory / "KNOWN-LIMITATIONS.md").write_text(
         "# Known limitations\n\nThis complete test fixture records an intentionally bounded limitation.\n",
         encoding="utf-8")
     (directory / "RELEASE-NOTES.md").write_text(
-        "# MetalSharp Wine v0.1.0\n\nThis complete test fixture represents release notes.\n",
+        f"# MetalSharp Wine v{version}\n\nThis complete test fixture represents release notes.\n",
         encoding="utf-8")
     evidence = {
         "integration": "wine-integration-evidence.json",
@@ -115,7 +116,7 @@ def make_candidate(directory: Path) -> None:
     }
     manifest = {
         "schema": 1,
-        "release": {"version": VERSION, "tag": f"v{VERSION}", "repository": REPOSITORY, "commit": COMMIT},
+        "release": {"version": version, "tag": f"v{version}", "repository": REPOSITORY, "commit": COMMIT},
         "components": {
             "wine": {"repository": "https://example.invalid/wine", "revision": "a" * 40, "license": "LGPL-2.1-or-later"},
             "dynarmic": {"repository": "https://example.invalid/dynarmic", "revision": "b" * 40, "license": "ISC"},
@@ -129,8 +130,8 @@ def make_candidate(directory: Path) -> None:
                    "exports": ["gem_wine_bridge_abi_version"]},
         "toolchain": {"host": "aarch64-apple-darwin",
                       "peArchitectures": ["i386", "x86_64", "aarch64", "arm64ec"]},
-        "package": {"name": ARCHIVE, "sha256": archive_hash,
-                    "size": (directory / ARCHIVE).stat().st_size,
+        "package": {"name": archive, "sha256": archive_hash,
+                    "size": (directory / archive).stat().st_size,
                     "sourceDateEpoch": 1, "files": [
                         {"path": "bin", "type": "directory", "mode": 0o755},
                         {"path": "bin/wine", "type": "file", "mode": 0o755,
@@ -161,6 +162,16 @@ class ReleaseToolTests(unittest.TestCase):
     def test_valid_candidate(self) -> None:
         result = self.validate()
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_accepts_a_versioned_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            make_candidate(directory, "0.1.1")
+            result = subprocess.run(
+                ["python3", str(VALIDATOR), "--directory", str(directory),
+                 "--repository", REPOSITORY, "--commit", COMMIT, "--version", "0.1.1"],
+                text=True, capture_output=True, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_rejects_substituted_archive(self) -> None:
         (self.directory / ARCHIVE).write_bytes(b"substitution")

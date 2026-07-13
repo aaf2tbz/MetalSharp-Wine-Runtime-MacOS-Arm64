@@ -7,19 +7,22 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
 
-UPLOADED_ASSETS = {
-    "metalsharp-wine-v0.1.0-macos-arm64.tar.zst",
-    "metalsharp-wine-v0.1.0-macos-arm64.tar.zst.sha256",
-    "release-manifest.json",
-    "wine-integration-evidence.json",
-    "sbom.spdx.json",
-    "evidence-index.json",
-    "KNOWN-LIMITATIONS.md",
-}
+VERSION = re.compile(r"v([0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?)\Z")
+
+
+def uploaded_assets(tag: str) -> set[str]:
+    match = VERSION.fullmatch(tag)
+    if not match:
+        fail(f"release tag is invalid: {tag!r}")
+    archive = f"metalsharp-wine-v{match.group(1)}-macos-arm64.tar.zst"
+    return {archive, f"{archive}.sha256", "release-manifest.json",
+            "wine-integration-evidence.json", "sbom.spdx.json", "evidence-index.json",
+            "KNOWN-LIMITATIONS.md"}
 
 
 def fail(message: str) -> None:
@@ -55,6 +58,7 @@ def main() -> None:
     parser.add_argument("--commit", required=True)
     parser.add_argument("--expect-draft", action=argparse.BooleanOptionalAction, default=True)
     args = parser.parse_args()
+    expected_assets = uploaded_assets(args.tag)
     if not os.environ.get("GH_TOKEN"):
         fail("GH_TOKEN is missing")
     release = gh_release(args.repository, args.tag)
@@ -72,7 +76,7 @@ def main() -> None:
         if asset["name"] in by_name:
             fail(f"release contains duplicate asset {asset['name']}")
         by_name[asset["name"]] = asset
-    if set(by_name) != UPLOADED_ASSETS:
+    if set(by_name) != expected_assets:
         fail(f"release asset allowlist mismatch: {sorted(by_name)}")
     for name, asset in by_name.items():
         local = args.directory / name

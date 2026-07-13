@@ -54,6 +54,14 @@ For development, use CMake 3.24+, a C11 compiler, Python 3.11+, Git, CTest, and 
 
 Mainline release verification downloads the already-published archive, validates its checksum, manifest, and ARM64-only host closure, then runs isolated fresh-prefix Wineboot/native/hybrid smoke tests. It does not build Wine in GitHub Actions.
 
+To publish an update without rebuilding Wine, merge a deliberate version bump to
+[`release/current.json`](release/current.json) on `main`, set `previousTag` to the
+currently published release, and place runtime-only updates below its configured
+`runtimeOverlay`. The release workflow downloads and validates the previous public
+bundle, applies that overlay, audits and smoke-tests the result, creates a new
+immutable tag, and dispatches the public-artifact verifier for that new tag. A
+release record whose tag does not change is a no-op.
+
 Local repository checks remain available through:
 
 ```sh
