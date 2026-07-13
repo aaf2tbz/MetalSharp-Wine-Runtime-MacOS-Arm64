@@ -65,8 +65,12 @@ class Environment final : public Dynarmic::A64::UserCallbacks {
         ticks_left = 1;
     }
 
-    void SetTickBudget(std::uint64_t ticks) { ticks_left = ticks; }
-    std::uint64_t TicksRemaining() const { return ticks_left; }
+    void SetTickBudget(std::uint64_t ticks) {
+        ticks_left = ticks;
+    }
+    std::uint64_t TicksRemaining() const {
+        return ticks_left;
+    }
 
     std::optional<std::uint32_t> MemoryReadCode(Dynarmic::A64::VAddr vaddr) override {
         std::array<std::uint8_t, sizeof(std::uint32_t)> bytes{};
@@ -615,8 +619,8 @@ extern "C" enum gem_stop_reason gem_arm64ec_dynarmic_run(struct gem_arm64ec_runt
             if (context->x[18] != context->teb) {
                 RestoreSnapshot(jit, before);
                 ExportContext(jit, *runtime, *context);
-                SetStopInfo(*runtime, GEM_STOP_INVARIANT_VIOLATION, 0U, 0U,
-                            GEM_ARM64EC_ACCESS_NONE, GEM_MEMORY_OK, 0U);
+                SetStopInfo(*runtime, GEM_STOP_INVARIANT_VIOLATION, 0U, 0U, GEM_ARM64EC_ACCESS_NONE,
+                            GEM_MEMORY_OK, 0U);
                 ClearTransientHalts(jit);
                 return GEM_STOP_INVARIANT_VIOLATION;
             }
@@ -630,8 +634,8 @@ extern "C" enum gem_stop_reason gem_arm64ec_dynarmic_run(struct gem_arm64ec_runt
         } else if (HasHalt(halt, Dynarmic::HaltReason::MemoryAbort)) {
             RestoreSnapshot(jit, before);
             ExportContext(jit, *runtime, *context);
-            SetStopInfo(*runtime, GEM_STOP_INVARIANT_VIOLATION, 0U, 0U,
-                        GEM_ARM64EC_ACCESS_NONE, GEM_MEMORY_OK,
+            SetStopInfo(*runtime, GEM_STOP_INVARIANT_VIOLATION, 0U, 0U, GEM_ARM64EC_ACCESS_NONE,
+                        GEM_MEMORY_OK,
                         static_cast<std::uint32_t>(Dynarmic::HaltReason::MemoryAbort));
             ClearTransientHalts(jit);
             return GEM_STOP_INVARIANT_VIOLATION;
@@ -641,8 +645,8 @@ extern "C" enum gem_stop_reason gem_arm64ec_dynarmic_run(struct gem_arm64ec_runt
         if (context->x[18] != context->teb) {
             RestoreSnapshot(jit, before);
             ExportContext(jit, *runtime, *context);
-            SetStopInfo(*runtime, GEM_STOP_INVARIANT_VIOLATION, 0U, 0U,
-                        GEM_ARM64EC_ACCESS_NONE, GEM_MEMORY_OK, 0U);
+            SetStopInfo(*runtime, GEM_STOP_INVARIANT_VIOLATION, 0U, 0U, GEM_ARM64EC_ACCESS_NONE,
+                        GEM_MEMORY_OK, 0U);
             ClearTransientHalts(jit);
             return GEM_STOP_INVARIANT_VIOLATION;
         }
