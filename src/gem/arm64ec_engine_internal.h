@@ -14,8 +14,11 @@ struct gem_arm64ec_runtime {
     struct gem_arm64ec_runtime_config config;
     struct gem_arm64ec_stop_info last_stop;
     struct gem_arm64ec_target_map *target_map;
+    gem_arm64ec_target_resolve_fn target_resolver;
+    void *target_resolver_opaque;
     gem_arm64ec_boundary_fn boundary_broker;
     void *boundary_opaque;
+    uint64_t boundary_return_pc;
     uint64_t transition_count;
     struct gem_u128 native_upper_simd[16];
     bool running;

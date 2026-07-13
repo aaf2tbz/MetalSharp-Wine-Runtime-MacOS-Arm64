@@ -25,6 +25,14 @@ namespace {
 constexpr std::uint32_t kNzcvMask = 0xf0000000U;
 constexpr std::size_t kVectorBytes = 16U;
 constexpr std::size_t kDczvaBytes = 64U;
+/* Internal-only stop marker used when ARM64X metadata redirects a translated
+ * block fetch to another ARM64/ARM64EC address. No guest instruction retires
+ * at the source address; block mode resumes at the parser-validated target. */
+constexpr std::uint32_t kMetadataRedirection = UINT32_C(0x52454449); /* "REDI" */
+constexpr std::uint32_t kInvariantTebMetadataRedirect = UINT32_C(0x54454201);
+constexpr std::uint32_t kInvariantTebBoundary = UINT32_C(0x54454202);
+constexpr std::uint32_t kInvariantTebBudget = UINT32_C(0x54454203);
+constexpr std::uint32_t kInvariantTebRunExit = UINT32_C(0x54454204);
 
 struct CpuSnapshot {
     std::array<std::uint64_t, 31> regs{};
@@ -35,6 +43,19 @@ struct CpuSnapshot {
     std::uint32_t fpcr = 0;
     std::uint32_t fpsr = 0;
 };
+
+bool IsBrk(std::uint32_t word);
+bool IsUdf(std::uint32_t word);
+bool HasForbiddenArm64ecRegister(std::uint32_t word);
+
+gem_arm64ec_target_status ResolveTarget(gem_arm64ec_runtime &runtime, std::uint64_t requested,
+                                        gem_arm64ec_target_result &result) {
+    if (runtime.target_resolver != nullptr)
+        return runtime.target_resolver(runtime.target_resolver_opaque, requested, &result);
+    if (runtime.target_map != nullptr)
+        return gem_arm64ec_target_resolve(runtime.target_map, requested, &result);
+    return GEM_ARM64EC_TARGET_OUTSIDE_IMAGE;
+}
 
 class Environment final : public Dynarmic::A64::UserCallbacks {
   public:
@@ -79,6 +100,10 @@ class Environment final : public Dynarmic::A64::UserCallbacks {
 
     std::optional<std::uint32_t> MemoryReadCode(Dynarmic::A64::VAddr vaddr) override {
         std::array<std::uint8_t, sizeof(std::uint32_t)> bytes{};
+        gem_arm64ec_target_kind target_kind =
+            runtime->config.execution_profile == GEM_ARM64EC_PROFILE_NATIVE_ARM64
+                ? GEM_ARM64EC_TARGET_ARM64
+                : GEM_ARM64EC_TARGET_ARM64EC;
         if (vaddr == runtime->config.host_return_sentinel) {
             SetStop(GEM_STOP_HOST_RETURN, vaddr, 0U);
             return std::nullopt;
@@ -87,21 +112,30 @@ class Environment final : public Dynarmic::A64::UserCallbacks {
             SetStop(GEM_STOP_ARCH_TRANSITION, vaddr, 0U);
             return std::nullopt;
         }
-        if (runtime->target_map != nullptr) {
+        if (runtime->config.boundary_delivery == GEM_ARM64EC_BOUNDARY_SVC_TRAP &&
+            runtime->boundary_return_pc != 0U && vaddr == runtime->boundary_return_pc) {
+            SetStop(GEM_STOP_ARCH_TRANSITION, vaddr, 0U);
+            return std::nullopt;
+        }
+        if (runtime->target_map != nullptr || runtime->target_resolver != nullptr) {
             gem_arm64ec_target_result target{};
-            const gem_arm64ec_target_status status =
-                gem_arm64ec_target_resolve(runtime->target_map, vaddr, &target);
+            const gem_arm64ec_target_status status = ResolveTarget(*runtime, vaddr, target);
             if (status != GEM_ARM64EC_TARGET_OK || target.resolved_va != vaddr ||
                 target.kind == GEM_ARM64EC_TARGET_X64_BOUNDARY) {
                 const gem_stop_reason reason =
                     status == GEM_ARM64EC_TARGET_OK &&
-                            target.kind == GEM_ARM64EC_TARGET_X64_BOUNDARY
+                            (target.kind == GEM_ARM64EC_TARGET_X64_BOUNDARY ||
+                             target.resolved_va != vaddr)
                         ? GEM_STOP_ARCH_TRANSITION
                         : GEM_STOP_INVARIANT_VIOLATION;
                 SetStop(reason, status == GEM_ARM64EC_TARGET_OK ? target.resolved_va : vaddr,
-                        static_cast<std::uint32_t>(status));
+                        status == GEM_ARM64EC_TARGET_OK && target.resolved_va != vaddr &&
+                                target.kind != GEM_ARM64EC_TARGET_X64_BOUNDARY
+                            ? kMetadataRedirection
+                            : static_cast<std::uint32_t>(status));
                 return std::nullopt;
             }
+            target_kind = target.kind;
         }
         const gem_memory_error error =
             gem_memory_fetch(runtime->memory, vaddr, bytes.data(), bytes.size());
@@ -109,7 +143,18 @@ class Environment final : public Dynarmic::A64::UserCallbacks {
             SetFault(vaddr, GEM_ARM64EC_ACCESS_FETCH, error);
             return std::nullopt;
         }
-        return LoadUnsigned<std::uint32_t>(bytes.data(), bytes.size());
+        const std::uint32_t instruction = LoadUnsigned<std::uint32_t>(bytes.data(), bytes.size());
+        if (IsBrk(instruction) || IsUdf(instruction)) {
+            SetStop(IsBrk(instruction) ? GEM_STOP_WINDOWS_EXCEPTION
+                                       : GEM_STOP_UNSUPPORTED_INSTRUCTION,
+                    vaddr, instruction);
+            return std::nullopt;
+        }
+        if (target_kind == GEM_ARM64EC_TARGET_ARM64EC && HasForbiddenArm64ecRegister(instruction)) {
+            SetStop(GEM_STOP_UNSUPPORTED_INSTRUCTION, vaddr, instruction);
+            return std::nullopt;
+        }
+        return instruction;
     }
 
     std::uint8_t MemoryRead8(Dynarmic::A64::VAddr vaddr) override {
@@ -210,7 +255,15 @@ class Environment final : public Dynarmic::A64::UserCallbacks {
     }
 
     void CallSVC(std::uint32_t swi) override {
-        SetStop(GEM_STOP_SYSCALL, 0U, swi);
+        if (runtime->config.boundary_delivery == GEM_ARM64EC_BOUNDARY_SVC_TRAP &&
+            swi == GEM_ARM64EC_BOUNDARY_SVC) {
+            const std::uint64_t pc = jit != nullptr && jit->GetPC() >= sizeof(std::uint32_t)
+                                         ? jit->GetPC() - sizeof(std::uint32_t)
+                                         : 0U;
+            SetStop(GEM_STOP_ARCH_TRANSITION, pc, swi);
+        } else {
+            SetStop(GEM_STOP_SYSCALL, 0U, swi);
+        }
     }
 
     void ExceptionRaised(Dynarmic::A64::VAddr pc, Dynarmic::A64::Exception exception) override {
@@ -417,7 +470,8 @@ struct Backend {
         user_config.processor_id = 0;
         user_config.global_monitor = &monitor;
         user_config.optimizations =
-            runtime->config.execution_profile == GEM_ARM64EC_PROFILE_NATIVE_ARM64
+            runtime->config.execution_profile == GEM_ARM64EC_PROFILE_NATIVE_ARM64 ||
+                    runtime->config.boundary_delivery == GEM_ARM64EC_BOUNDARY_SVC_TRAP
                 ? Dynarmic::all_safe_optimizations
                 : Dynarmic::no_optimizations;
         user_config.unsafe_optimizations = false;
@@ -605,19 +659,238 @@ extern "C" enum gem_stop_reason gem_arm64ec_dynarmic_run(struct gem_arm64ec_runt
     Backend &backend = *static_cast<Backend *>(runtime->backend);
     Dynarmic::A64::Jit &jit = *backend.jit;
     std::uint64_t retired = 0;
-
     backend.env.ResetRun();
     backend.monitor.Clear();
     jit.Reset();
     jit.ClearExclusiveState();
-    /* Native ARM64 keeps translated blocks across bounded resumes. Host
-     * executable writes use runtime_invalidate_code(), while guest executable
-     * writes request a safe cache-invalidation halt from the memory callback.
-     * ARM64EC target-map execution retains its conservative per-run flush. */
-    if (runtime->config.execution_profile != GEM_ARM64EC_PROFILE_NATIVE_ARM64)
+    /* Block-capable profiles retain translated code across bounded resumes.
+     * Host executable writes use runtime_invalidate_code(), while guest
+     * executable writes request a safe cache-invalidation halt from the
+     * memory callback. Instruction-precise ARM64EC retains its conservative
+     * per-run flush. */
+    if (runtime->config.execution_profile != GEM_ARM64EC_PROFILE_NATIVE_ARM64 &&
+        runtime->config.boundary_delivery != GEM_ARM64EC_BOUNDARY_SVC_TRAP)
         jit.ClearCache();
     ImportContext(jit, *runtime, *context);
     ClearTransientHalts(jit);
+
+    if (runtime->config.boundary_delivery == GEM_ARM64EC_BOUNDARY_SVC_TRAP) {
+        std::uint32_t zero_progress_resumes = 0U;
+        while (retired < budget) {
+            const std::uint64_t retired_before = retired;
+            const std::uint64_t remaining = budget - retired;
+            const CpuSnapshot before = TakeSnapshot(jit);
+            backend.env.ResetInstruction();
+            backend.env.SetDeferredGuard(true);
+            backend.env.SetTickBudget(remaining);
+            const Dynarmic::HaltReason halt = jit.Run();
+            backend.env.SetDeferredGuard(false);
+            std::uint64_t segment_retired = remaining - backend.env.TicksRemaining();
+            /* A guest write to translated code requests an immediate cache
+             * halt from inside the memory callback. Dynarmic has committed
+             * that store and advanced PC, but may report the pre-decrement
+             * tick count for this asynchronous block exit. Account for that
+             * one retired store exactly once; a non-advancing exit remains a
+             * fail-closed engine invariant instead of an unbounded retry. */
+            if (segment_retired == 0U && backend.env.cache_dirty) {
+                if (jit.GetPC() == before.pc) {
+                    RestoreSnapshot(jit, before);
+                    ExportContext(jit, *runtime, *context);
+                    SetStopInfo(
+                        *runtime, GEM_STOP_INVARIANT_VIOLATION, retired_before, before.pc,
+                        GEM_ARM64EC_ACCESS_NONE, GEM_MEMORY_OK,
+                        static_cast<std::uint32_t>(Dynarmic::HaltReason::CacheInvalidation));
+                    ClearTransientHalts(jit);
+                    return GEM_STOP_INVARIANT_VIOLATION;
+                }
+                segment_retired = 1U;
+            }
+            retired += segment_retired;
+
+            if (segment_retired == 0U && backend.env.pending_reason == GEM_STOP_NONE &&
+                !backend.env.cache_dirty) {
+                if (++zero_progress_resumes > UINT32_C(1024)) {
+                    ExportContext(jit, *runtime, *context);
+                    SetStopInfo(*runtime, GEM_STOP_INVARIANT_VIOLATION, retired, context->pc,
+                                GEM_ARM64EC_ACCESS_NONE, GEM_MEMORY_OK,
+                                static_cast<std::uint32_t>(halt));
+                    ClearTransientHalts(jit);
+                    return GEM_STOP_INVARIANT_VIOLATION;
+                }
+            } else if (segment_retired != 0U) {
+                zero_progress_resumes = 0U;
+            }
+
+            if (backend.env.cache_dirty || HasHalt(halt, Dynarmic::HaltReason::CacheInvalidation))
+                jit.ClearCache();
+
+            if (backend.env.pending_reason == GEM_STOP_MEMORY_FAULT) {
+                /* Replay only the faulting translated segment through the
+                 * instruction-precise path before publishing fault state. */
+                RestoreSnapshot(jit, before);
+                ExportContext(jit, *runtime, *context);
+                retired = retired_before;
+                backend.env.ResetInstruction();
+                ClearTransientHalts(jit);
+                break;
+            }
+
+            if (backend.env.pending_reason == GEM_STOP_ARCH_TRANSITION &&
+                backend.env.pending_engine_status == kMetadataRedirection) {
+                /* MemoryReadCode cannot change Dynarmic's block start. Apply
+                 * the parser-validated ARM64X redirection at the block edge,
+                 * preserving all state produced before that edge. */
+                jit.SetPC(backend.env.pending_fault_address);
+                ExportContext(jit, *runtime, *context);
+                if (context->x[18] != context->teb) {
+                    const std::uint64_t observed_x18 = context->x[18];
+                    RestoreSnapshot(jit, before);
+                    ExportContext(jit, *runtime, *context);
+                    SetStopInfo(*runtime, GEM_STOP_INVARIANT_VIOLATION, retired_before,
+                                observed_x18, GEM_ARM64EC_ACCESS_NONE, GEM_MEMORY_OK,
+                                kInvariantTebMetadataRedirect);
+                    ClearTransientHalts(jit);
+                    return GEM_STOP_INVARIANT_VIOLATION;
+                }
+                backend.env.ResetInstruction();
+                ClearTransientHalts(jit);
+                continue;
+            }
+
+            if (backend.env.pending_reason != GEM_STOP_NONE) {
+                const enum gem_stop_reason pending = backend.env.pending_reason;
+                const bool svc_boundary =
+                    pending == GEM_STOP_ARCH_TRANSITION &&
+                    backend.env.pending_engine_status == GEM_ARM64EC_BOUNDARY_SVC;
+                const bool fetch_boundary = pending == GEM_STOP_HOST_RETURN ||
+                                            (pending == GEM_STOP_ARCH_TRANSITION && !svc_boundary);
+                std::uint64_t boundary_retired = retired;
+
+                if (fetch_boundary || svc_boundary)
+                    jit.SetPC(backend.env.pending_fault_address);
+                else if (jit.GetPC() >= sizeof(std::uint32_t))
+                    jit.SetPC(jit.GetPC() - sizeof(std::uint32_t));
+                if (svc_boundary && boundary_retired > retired_before)
+                    --boundary_retired; /* the trap marker is not guest work */
+                ExportContext(jit, *runtime, *context);
+                if (context->x[18] != context->teb) {
+                    const std::uint64_t observed_x18 = context->x[18];
+                    RestoreSnapshot(jit, before);
+                    ExportContext(jit, *runtime, *context);
+                    SetStopInfo(*runtime, GEM_STOP_INVARIANT_VIOLATION, retired_before,
+                                observed_x18, GEM_ARM64EC_ACCESS_NONE, GEM_MEMORY_OK,
+                                kInvariantTebBoundary);
+                    ClearTransientHalts(jit);
+                    return GEM_STOP_INVARIANT_VIOLATION;
+                }
+
+                if (pending == GEM_STOP_ARCH_TRANSITION && runtime->boundary_broker != nullptr) {
+                    gem_thread_context broker_context = *context;
+                    gem_arm64ec_boundary_kind boundary_kind = GEM_ARM64EC_BOUNDARY_CHECK_ICALL;
+                    const gem_arm64ec_boundary_action action = runtime->boundary_broker(
+                        runtime->boundary_opaque, context->pc, &broker_context, &boundary_kind);
+                    if (action != GEM_ARM64EC_BOUNDARY_NOT_HANDLED) {
+                        if (boundary_kind < GEM_ARM64EC_BOUNDARY_CHECK_ICALL ||
+                            boundary_kind > GEM_ARM64EC_BOUNDARY_DISPATCH_RETURN ||
+                            action == GEM_ARM64EC_BOUNDARY_FAIL ||
+                            !gem_context_is_valid(&broker_context) ||
+                            broker_context.x[18] != context->teb ||
+                            (action == GEM_ARM64EC_BOUNDARY_STOP &&
+                             broker_context.pc != context->pc) ||
+                            (action == GEM_ARM64EC_BOUNDARY_RESUME &&
+                             broker_context.pc == context->pc) ||
+                            (runtime->config.max_transitions != 0U &&
+                             runtime->transition_count >= runtime->config.max_transitions)) {
+                            SetStopInfo(*runtime, GEM_STOP_INVARIANT_VIOLATION, boundary_retired,
+                                        context->pc, GEM_ARM64EC_ACCESS_NONE, GEM_MEMORY_OK,
+                                        static_cast<std::uint32_t>(action));
+                            ClearTransientHalts(jit);
+                            return GEM_STOP_INVARIANT_VIOLATION;
+                        }
+                        ++runtime->transition_count;
+                        if (action == GEM_ARM64EC_BOUNDARY_STOP) {
+                            *context = broker_context;
+                            SetStopInfo(*runtime, GEM_STOP_ARCH_TRANSITION, boundary_retired,
+                                        context->pc, GEM_ARM64EC_ACCESS_NONE, GEM_MEMORY_OK,
+                                        static_cast<std::uint32_t>(boundary_kind));
+                            ClearTransientHalts(jit);
+                            return GEM_STOP_ARCH_TRANSITION;
+                        }
+                        ImportContext(jit, *runtime, broker_context);
+                        *context = broker_context;
+                        retired = boundary_retired;
+                        ClearTransientHalts(jit);
+                        continue;
+                    }
+                }
+
+                SetStopInfo(*runtime, pending, boundary_retired, backend.env.pending_fault_address,
+                            backend.env.pending_access, backend.env.pending_memory_error,
+                            backend.env.pending_engine_status);
+                ClearTransientHalts(jit);
+                return pending;
+            }
+
+            if (HasHalt(halt, Dynarmic::HaltReason::UserDefined2)) {
+                /* Dynarmic refuses to enter a translated block when its
+                 * complete cycle count exceeds the remaining tick budget.
+                 * Yield the instructions already retired in this segment;
+                 * the caller will resume the untouched block with a fresh
+                 * bounded budget. Retrying the same remainder cannot make
+                 * progress. */
+                ExportContext(jit, *runtime, *context);
+                if (context->x[18] != context->teb) {
+                    const std::uint64_t observed_x18 = context->x[18];
+                    RestoreSnapshot(jit, before);
+                    ExportContext(jit, *runtime, *context);
+                    SetStopInfo(*runtime, GEM_STOP_INVARIANT_VIOLATION, retired_before,
+                                observed_x18, GEM_ARM64EC_ACCESS_NONE, GEM_MEMORY_OK,
+                                kInvariantTebBudget);
+                    ClearTransientHalts(jit);
+                    return GEM_STOP_INVARIANT_VIOLATION;
+                }
+                SetStopInfo(*runtime, GEM_STOP_BUDGET_EXPIRED, retired, 0U, GEM_ARM64EC_ACCESS_NONE,
+                            GEM_MEMORY_OK, 0U);
+                ClearTransientHalts(jit);
+                return GEM_STOP_BUDGET_EXPIRED;
+            }
+
+            if (HasHalt(halt, Dynarmic::HaltReason::MemoryAbort)) {
+                RestoreSnapshot(jit, before);
+                ExportContext(jit, *runtime, *context);
+                SetStopInfo(*runtime, GEM_STOP_INVARIANT_VIOLATION, retired_before, 0U,
+                            GEM_ARM64EC_ACCESS_NONE, GEM_MEMORY_OK,
+                            static_cast<std::uint32_t>(Dynarmic::HaltReason::MemoryAbort));
+                ClearTransientHalts(jit);
+                return GEM_STOP_INVARIANT_VIOLATION;
+            }
+            if (HasHalt(halt, Dynarmic::HaltReason::UserDefined3)) {
+                ExportContext(jit, *runtime, *context);
+                SetStopInfo(*runtime, GEM_STOP_ASYNC_REQUEST, retired, 0U, GEM_ARM64EC_ACCESS_NONE,
+                            GEM_MEMORY_OK, 0U);
+                ClearTransientHalts(jit);
+                return GEM_STOP_ASYNC_REQUEST;
+            }
+
+            ExportContext(jit, *runtime, *context);
+            if (context->x[18] != context->teb) {
+                const std::uint64_t observed_x18 = context->x[18];
+                RestoreSnapshot(jit, before);
+                ExportContext(jit, *runtime, *context);
+                SetStopInfo(*runtime, GEM_STOP_INVARIANT_VIOLATION, retired_before, observed_x18,
+                            GEM_ARM64EC_ACCESS_NONE, GEM_MEMORY_OK, kInvariantTebRunExit);
+                ClearTransientHalts(jit);
+                return GEM_STOP_INVARIANT_VIOLATION;
+            }
+            if (retired == budget) {
+                SetStopInfo(*runtime, GEM_STOP_BUDGET_EXPIRED, retired, 0U, GEM_ARM64EC_ACCESS_NONE,
+                            GEM_MEMORY_OK, 0U);
+                ClearTransientHalts(jit);
+                return GEM_STOP_BUDGET_EXPIRED;
+            }
+            ClearTransientHalts(jit);
+        }
+    }
 
     if (runtime->config.execution_profile == GEM_ARM64EC_PROFILE_NATIVE_ARM64 &&
         runtime->target_map == nullptr && runtime->boundary_broker == nullptr) {
@@ -761,10 +1034,10 @@ extern "C" enum gem_stop_reason gem_arm64ec_dynarmic_run(struct gem_arm64ec_runt
                         GEM_MEMORY_OK, 0);
             return GEM_STOP_ARCH_TRANSITION;
         }
-        if (runtime->target_map != nullptr) {
+        if (runtime->target_map != nullptr || runtime->target_resolver != nullptr) {
             gem_arm64ec_target_result target{};
             const gem_arm64ec_target_status target_status =
-                gem_arm64ec_target_resolve(runtime->target_map, pc_before, &target);
+                ResolveTarget(*runtime, pc_before, target);
             if (target_status != GEM_ARM64EC_TARGET_OK) {
                 ExportContext(jit, *runtime, *context);
                 SetStopInfo(*runtime, GEM_STOP_INVARIANT_VIOLATION, retired, pc_before,

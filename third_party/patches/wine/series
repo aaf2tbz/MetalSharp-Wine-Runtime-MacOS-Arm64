@@ -7,3 +7,4 @@
 0007-ntdll-execute-native-arm64-through-gem.patch
 0008-darwin-arm64-add-native-gem-launch-contract.patch
 0009-ntdll-complete-gem-fault-suspend-boundaries.patch
+0010-ntdll-register-arm64x-images-with-gem.patch

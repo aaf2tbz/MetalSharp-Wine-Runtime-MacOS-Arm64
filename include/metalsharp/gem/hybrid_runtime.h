@@ -14,14 +14,19 @@ extern "C" {
 
 struct gem_hybrid_runtime_config {
     uint32_t version;
-    uint32_t reserved;
+    enum gem_arm64ec_boundary_delivery boundary_delivery;
     uint64_t loaded_base;
     uint64_t checker_helper;
     uint64_t dispatch_call_helper;
+    /* Optional jump-only x64 dispatcher. Zero keeps the original three-helper
+     * proof configuration source-compatible. */
+    uint64_t dispatch_jump_helper;
     uint64_t dispatch_ret_helper;
     uint64_t x64_return_sentinel;
     uint64_t host_return_sentinel;
     uint64_t max_budget;
+    gem_arm64ec_target_resolve_fn target_resolver;
+    void *target_resolver_opaque;
 };
 
 enum gem_hybrid_return_mode {
@@ -57,9 +62,10 @@ enum gem_hybrid_stop_source {
 };
 
 /* Exact engine stop details from the most recent run. The source selects the
- * valid engine member. Broker-generated invariant failures have source BROKER
- * and zeroed engine details. This sidecar does not change the canonical
- * 720-byte thread-context ABI. */
+ * valid engine member. Broker-generated invariant failures have source BROKER;
+ * arm64ec.fault_address identifies the rejected PC and arm64ec.engine_status
+ * identifies the coordinator diagnostic site. This sidecar does not change
+ * the canonical 720-byte thread-context ABI. */
 struct gem_hybrid_stop_info {
     enum gem_stop_reason reason;
     enum gem_hybrid_stop_source source;
@@ -119,6 +125,18 @@ gem_hybrid_runtime_run_integer_nested(struct gem_hybrid_runtime *runtime,
                                       struct gem_thread_context *context,
                                       const struct gem_hybrid_nested_control *control,
                                       uint64_t budget, struct gem_hybrid_roundtrip_stats *stats);
+/* Stateful Wine coordinator. Unlike the bounded one-shot proof helpers above,
+ * this entry point preserves its two-frame transition sidecar across ordinary
+ * syscall, Unix-call, fault, async, and budget stops. Architecture transitions
+ * inside the registered ARM64X image are consumed internally; an architecture
+ * transition is returned only when control has reached the exact native caller
+ * captured on entry. */
+enum gem_stop_reason gem_hybrid_runtime_run(struct gem_hybrid_runtime *runtime,
+                                            struct gem_thread_context *context, uint64_t budget,
+                                            struct gem_hybrid_roundtrip_stats *stats);
+void gem_hybrid_runtime_request_async_stop(struct gem_hybrid_runtime *runtime);
+void gem_hybrid_runtime_invalidate_code(struct gem_hybrid_runtime *runtime, uint64_t address,
+                                        uint64_t size);
 bool gem_hybrid_runtime_last_stop_info(const struct gem_hybrid_runtime *runtime,
                                        struct gem_hybrid_stop_info *out_info);
 

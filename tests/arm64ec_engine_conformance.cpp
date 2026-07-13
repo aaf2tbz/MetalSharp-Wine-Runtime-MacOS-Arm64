@@ -796,6 +796,22 @@ void TestNativeArm64Profile() {
     EXPECT(context.x[18] == kTebA);
     EXPECT(context.pc == kHostReturn);
 
+    /* MSVC's ARM64 support library reads CurrentEL before consulting the
+     * user-mode KUSER feature byte. The native backend must return EL0 instead
+     * of emitting Dynarmic's unsupported Interpret terminal. */
+    constexpr u32 MRS_X16_CURRENTEL = 0xd5384250U;
+    EXPECT(gem_memory_protect(memory, kCode, GEM_GUEST_PAGE_SIZE, GEM_PAGE_READWRITE, nullptr) ==
+           GEM_MEMORY_OK);
+    WriteWords(memory, kCode, {MRS_X16_CURRENTEL, RET});
+    EXPECT(gem_memory_protect(memory, kCode, GEM_GUEST_PAGE_SIZE, GEM_PAGE_EXECUTE_READ, nullptr) ==
+           GEM_MEMORY_OK);
+    gem_arm64ec_runtime_invalidate_code(runtime, kCode, GEM_GUEST_PAGE_SIZE);
+    InitContext(context);
+    context.x[16] = UINT64_MAX;
+    EXPECT(gem_arm64ec_runtime_run(runtime, &context, 8U) == GEM_STOP_HOST_RETURN);
+    EXPECT(context.x[16] == 0U);
+    EXPECT(context.pc == kHostReturn);
+
     /* Windows uses the architectural YIELD hint in ordinary spin loops. */
     EXPECT(gem_memory_protect(memory, kCode, GEM_GUEST_PAGE_SIZE, GEM_PAGE_READWRITE, nullptr) ==
            GEM_MEMORY_OK);

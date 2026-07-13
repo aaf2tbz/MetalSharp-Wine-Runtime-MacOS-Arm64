@@ -10,7 +10,9 @@
 #define PE_DOS_HEADER_MIN_SIZE ((size_t)64)
 #define PE_SIGNATURE UINT32_C(0x00004550)
 #define PE_MACHINE_ARM64X UINT16_C(0xA64E)
+#define PE_MACHINE_ARM64EC UINT16_C(0xA641)
 #define PE_MACHINE_ARM64 UINT16_C(0xAA64)
+#define PE_MACHINE_AMD64 UINT16_C(0x8664)
 #define PE_OPTIONAL_MAGIC_PE32_PLUS UINT16_C(0x020B)
 #define PE_DIRECTORY_LOAD_CONFIG UINT32_C(10)
 #define PE32_PLUS_DATA_DIRECTORY_OFFSET UINT32_C(112)
@@ -58,6 +60,8 @@ struct gem_pe_arm64x_image {
 struct parser_state {
     const uint8_t *bytes;
     size_t byte_count;
+    uint64_t loaded_base;
+    bool mapped_image;
     struct gem_pe_arm64x_parse_options options;
     struct gem_pe_arm64x_image *image;
 };
@@ -191,6 +195,18 @@ static enum gem_pe_status rva_to_file_offset_internal(const struct gem_pe_arm64x
     return GEM_PE_OK;
 }
 
+static enum gem_pe_status rva_to_parser_offset(const struct parser_state *state, uint32_t rva,
+                                               uint32_t size, size_t *out_offset) {
+    uint32_t end = 0U;
+    if (!state->mapped_image)
+        return rva_to_file_offset_internal(state->image, rva, size, out_offset);
+    if (size == 0U || !checked_add_u32(rva, size, &end) ||
+        end > state->image->summary.size_of_image || (size_t)end > state->byte_count)
+        return GEM_PE_ERROR_BAD_RVA;
+    *out_offset = (size_t)rva;
+    return GEM_PE_OK;
+}
+
 static enum gem_pe_rva_class code_type_to_class(uint32_t type) {
     if (type == (uint32_t)CHPE_RANGE_ARM64)
         return GEM_PE_RVA_ARM64;
@@ -299,8 +315,11 @@ static enum gem_pe_status parse_headers(struct parser_state *state,
     section_count = read_u16le_unchecked(state->bytes, coff_offset + 2U);
     optional_header_size = read_u16le_unchecked(state->bytes, coff_offset + 16U);
     /* Windows/Wine emit CHPE-bearing ARM64 images as 0xaa64. ARM64X is also
-     * accepted; the mandatory CHPE parse below rejects ordinary ARM64. */
-    if (machine != PE_MACHINE_ARM64 && machine != PE_MACHINE_ARM64X)
+     * accepted, and Wine may expose a mapped ARM64X image through its ARM64EC
+     * (0xa641) or compatibility AMD64 (0x8664) constituent header. The
+     * mandatory CHPE parse below rejects ordinary images with these IDs. */
+    if (machine != PE_MACHINE_ARM64 && machine != PE_MACHINE_ARM64X &&
+        (!state->mapped_image || (machine != PE_MACHINE_ARM64EC && machine != PE_MACHINE_AMD64)))
         return GEM_PE_ERROR_UNSUPPORTED_FORMAT;
     if (section_count == 0U || section_count > state->options.max_sections)
         return GEM_PE_ERROR_LIMIT_EXCEEDED;
@@ -332,6 +351,8 @@ static enum gem_pe_status parse_headers(struct parser_state *state,
         number_of_rva_and_sizes <= PE_DIRECTORY_LOAD_CONFIG)
         return GEM_PE_ERROR_BAD_OPTIONAL_HEADER;
     if (image->size_of_headers > state->byte_count)
+        return GEM_PE_ERROR_BAD_OPTIONAL_HEADER;
+    if (state->mapped_image && image->summary.size_of_image > state->byte_count)
         return GEM_PE_ERROR_BAD_OPTIONAL_HEADER;
 
     if (!checked_mul_size((size_t)section_count, PE_SECTION_HEADER_SIZE, &section_table_size) ||
@@ -371,7 +392,7 @@ static enum gem_pe_status parse_headers(struct parser_state *state,
                 return GEM_PE_ERROR_OVERLAPPING_RANGES;
         }
         previous_end = section_end;
-        if (section->raw_size != 0U) {
+        if (!state->mapped_image && section->raw_size != 0U) {
             if (!checked_add_u32(section->raw_pointer, section->raw_size, &raw_end) ||
                 raw_end > state->byte_count)
                 return GEM_PE_ERROR_BAD_SECTION_TABLE;
@@ -401,8 +422,8 @@ static enum gem_pe_status parse_load_config_and_chpe(struct parser_state *state,
     image->summary.load_config_size = load_config_size;
     if (load_config_rva == 0U || load_config_size < PE_LOAD_CONFIG_CHPE_POINTER_END)
         return GEM_PE_ERROR_BAD_LOAD_CONFIG;
-    status = rva_to_file_offset_internal(image, load_config_rva, PE_LOAD_CONFIG_CHPE_POINTER_END,
-                                         &load_config_offset);
+    status = rva_to_parser_offset(state, load_config_rva, PE_LOAD_CONFIG_CHPE_POINTER_END,
+                                  &load_config_offset);
     if (status != GEM_PE_OK)
         return GEM_PE_ERROR_BAD_LOAD_CONFIG;
     load_config_internal_size = read_u32le_unchecked(state->bytes, load_config_offset);
@@ -414,23 +435,22 @@ static enum gem_pe_status parse_load_config_and_chpe(struct parser_state *state,
         read_u64le_unchecked(state->bytes, load_config_offset + PE_LOAD_CONFIG_CHPE_POINTER_OFFSET);
     if (chpe_va == 0U)
         return GEM_PE_ERROR_NO_CHPE_METADATA;
-    if (chpe_va < image->summary.image_base)
+    if (chpe_va < (state->mapped_image ? state->loaded_base : image->summary.image_base))
         return GEM_PE_ERROR_BAD_LOAD_CONFIG;
-    chpe_rva64 = chpe_va - image->summary.image_base;
+    chpe_rva64 = chpe_va - (state->mapped_image ? state->loaded_base : image->summary.image_base);
     if (chpe_rva64 > UINT32_MAX)
         return GEM_PE_ERROR_BAD_LOAD_CONFIG;
     chpe_metadata_rva = (uint32_t)chpe_rva64;
     image->summary.chpe_metadata_rva = chpe_metadata_rva;
 
-    status = rva_to_file_offset_internal(image, chpe_metadata_rva, 4U, &chpe_metadata_offset);
+    status = rva_to_parser_offset(state, chpe_metadata_rva, 4U, &chpe_metadata_offset);
     if (status != GEM_PE_OK)
         return GEM_PE_ERROR_BAD_CHPE_METADATA;
     out_fields->version = read_u32le_unchecked(state->bytes, chpe_metadata_offset);
     if (out_fields->version != 1U && out_fields->version != 2U)
         return GEM_PE_ERROR_UNSUPPORTED_CHPE_VERSION;
     metadata_size = out_fields->version == 1U ? PE_CHPE_METADATA_V1_SIZE : PE_CHPE_METADATA_V2_SIZE;
-    status =
-        rva_to_file_offset_internal(image, chpe_metadata_rva, metadata_size, &chpe_metadata_offset);
+    status = rva_to_parser_offset(state, chpe_metadata_rva, metadata_size, &chpe_metadata_offset);
     if (status != GEM_PE_OK)
         return GEM_PE_ERROR_BAD_CHPE_METADATA;
 
@@ -492,7 +512,7 @@ static enum gem_pe_status allocate_metadata_arrays(struct parser_state *state,
     return GEM_PE_OK;
 }
 
-static enum gem_pe_status table_file_span(const struct gem_pe_arm64x_image *image, uint32_t rva,
+static enum gem_pe_status table_file_span(const struct parser_state *state, uint32_t rva,
                                           uint32_t count, uint32_t record_size,
                                           size_t *out_offset) {
     size_t table_size_size = 0;
@@ -505,7 +525,7 @@ static enum gem_pe_status table_file_span(const struct gem_pe_arm64x_image *imag
     if (!checked_mul_size((size_t)count, (size_t)record_size, &table_size_size) ||
         table_size_size > UINT32_MAX)
         return GEM_PE_ERROR_OVERFLOW;
-    return rva_to_file_offset_internal(image, rva, (uint32_t)table_size_size, out_offset);
+    return rva_to_parser_offset(state, rva, (uint32_t)table_size_size, out_offset);
 }
 
 static enum gem_pe_status parse_code_map(struct parser_state *state,
@@ -513,7 +533,7 @@ static enum gem_pe_status parse_code_map(struct parser_state *state,
     struct gem_pe_arm64x_image *image = state->image;
     size_t table_offset = 0;
     size_t i = 0;
-    enum gem_pe_status status = table_file_span(image, fields->code_map_rva, fields->code_map_count,
+    enum gem_pe_status status = table_file_span(state, fields->code_map_rva, fields->code_map_count,
                                                 PE_CHPE_CODE_MAP_RECORD_SIZE, &table_offset);
     if (status != GEM_PE_OK)
         return status == GEM_PE_ERROR_OVERFLOW ? status : GEM_PE_ERROR_BAD_CHPE_METADATA;
@@ -566,7 +586,7 @@ static enum gem_pe_status parse_entry_ranges(struct parser_state *state,
     size_t table_offset = 0;
     size_t i = 0;
     enum gem_pe_status status =
-        table_file_span(image, fields->entry_ranges_rva, fields->entry_range_count,
+        table_file_span(state, fields->entry_ranges_rva, fields->entry_range_count,
                         PE_CHPE_ENTRY_RECORD_SIZE, &table_offset);
     if (status != GEM_PE_OK)
         return status == GEM_PE_ERROR_OVERFLOW ? status : GEM_PE_ERROR_BAD_CHPE_METADATA;
@@ -605,7 +625,7 @@ static enum gem_pe_status parse_redirections(struct parser_state *state,
     size_t table_offset = 0;
     size_t i = 0;
     enum gem_pe_status status =
-        table_file_span(image, fields->redirections_rva, fields->redirection_count,
+        table_file_span(state, fields->redirections_rva, fields->redirection_count,
                         PE_CHPE_REDIRECTION_RECORD_SIZE, &table_offset);
     if (status != GEM_PE_OK)
         return status == GEM_PE_ERROR_OVERFLOW ? status : GEM_PE_ERROR_BAD_CHPE_METADATA;
@@ -676,9 +696,10 @@ void gem_pe_arm64x_default_parse_options(struct gem_pe_arm64x_parse_options *opt
     options->max_redirections = GEM_PE_ARM64X_DEFAULT_MAX_REDIRECTIONS;
 }
 
-enum gem_pe_status gem_pe_arm64x_parse(const uint8_t *bytes, size_t byte_count,
-                                       const struct gem_pe_arm64x_parse_options *options,
-                                       struct gem_pe_arm64x_image **out_image) {
+static enum gem_pe_status parse_image(const uint8_t *bytes, size_t byte_count, uint64_t loaded_base,
+                                      bool mapped_image,
+                                      const struct gem_pe_arm64x_parse_options *options,
+                                      struct gem_pe_arm64x_image **out_image) {
     struct parser_state state;
     struct chpe_metadata_fields fields;
     size_t load_config_dir_offset = 0;
@@ -690,7 +711,7 @@ enum gem_pe_status gem_pe_arm64x_parse(const uint8_t *bytes, size_t byte_count,
     if (out_image == NULL)
         return GEM_PE_ERROR_INVALID_ARGUMENT;
     *out_image = NULL;
-    if (bytes == NULL || byte_count == 0U)
+    if (bytes == NULL || byte_count == 0U || (mapped_image && loaded_base == 0U))
         return GEM_PE_ERROR_INVALID_ARGUMENT;
     memset(&state, 0, sizeof(state));
     memset(&fields, 0, sizeof(fields));
@@ -699,6 +720,8 @@ enum gem_pe_status gem_pe_arm64x_parse(const uint8_t *bytes, size_t byte_count,
         return status;
     state.bytes = bytes;
     state.byte_count = byte_count;
+    state.loaded_base = loaded_base;
+    state.mapped_image = mapped_image;
     state.image = (struct gem_pe_arm64x_image *)calloc(1U, sizeof(*state.image));
     if (state.image == NULL)
         return GEM_PE_ERROR_LIMIT_EXCEEDED;
@@ -743,6 +766,19 @@ enum gem_pe_status gem_pe_arm64x_parse(const uint8_t *bytes, size_t byte_count,
     }
     *out_image = state.image;
     return GEM_PE_OK;
+}
+
+enum gem_pe_status gem_pe_arm64x_parse(const uint8_t *bytes, size_t byte_count,
+                                       const struct gem_pe_arm64x_parse_options *options,
+                                       struct gem_pe_arm64x_image **out_image) {
+    return parse_image(bytes, byte_count, 0U, false, options, out_image);
+}
+
+enum gem_pe_status gem_pe_arm64x_parse_mapped(const uint8_t *mapped_image, size_t mapped_size,
+                                              uint64_t loaded_base,
+                                              const struct gem_pe_arm64x_parse_options *options,
+                                              struct gem_pe_arm64x_image **out_image) {
+    return parse_image(mapped_image, mapped_size, loaded_base, true, options, out_image);
 }
 
 enum gem_pe_status gem_pe_arm64x_image_clone(const struct gem_pe_arm64x_image *image,

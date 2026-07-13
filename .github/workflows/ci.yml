@@ -413,12 +413,14 @@ jobs:
           -DMSWR_ENGINE_CONFORMANCE=ON
           -DMSWR_ENABLE_X64_ENGINE=ON
           -DMSWR_X64_ENGINE_CONFORMANCE=ON
+          -DMSWR_BUILD_WINE_BRIDGE=ON
+          -DMSWR_WINE_BRIDGE_CONFORMANCE=ON
           -DMSWR_ZERO_ROSETTA_AUDIT=ON
           -DMSWR_ARM64X_ROUNDTRIP_ARTIFACT_DIR="${{ runner.temp }}/arm64x-issue14-bundle/a"
       - run: arch -arm64 cmake --build build-roundtrip --parallel
       - run: >-
           arch -arm64 ctest --test-dir build-roundtrip --output-on-failure
-          -R 'gem.(arm64x_roundtrip|arm64ec_engine_conformance|x64_engine_conformance|pe_arm64x_loader_test|context_conversion_test)'
+          -R 'gem.(arm64x_roundtrip|wine_arm64x_conformance|wine_bridge_conformance|arm64ec_engine_conformance|x64_engine_conformance|pe_arm64x_loader_test|context_conversion_test)'
       - run: tools/ci/audit-zero-rosetta.sh build-roundtrip
       - run: test -z "$(grep HAVE_JIT build-roundtrip/_deps/blink_gem-src/config.h || true)"
       - run: test -z "$(git status --porcelain --untracked-files=all)"

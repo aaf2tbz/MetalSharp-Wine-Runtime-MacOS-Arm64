@@ -122,6 +122,14 @@ void gem_pe_arm64x_default_parse_options(struct gem_pe_arm64x_parse_options *opt
 enum gem_pe_status gem_pe_arm64x_parse(const uint8_t *bytes, size_t byte_count,
                                        const struct gem_pe_arm64x_parse_options *options,
                                        struct gem_pe_arm64x_image **out_image);
+/* Parses a PE image after Wine has mapped sections at their RVAs, selected its
+ * ARM64EC constituent, and applied base relocations. loaded_base is used to
+ * validate the relocated absolute CHPE metadata pointer; all metadata still
+ * receives the same bounded checks as file-backed parsing. */
+enum gem_pe_status gem_pe_arm64x_parse_mapped(const uint8_t *mapped_image, size_t mapped_size,
+                                              uint64_t loaded_base,
+                                              const struct gem_pe_arm64x_parse_options *options,
+                                              struct gem_pe_arm64x_image **out_image);
 void gem_pe_arm64x_image_destroy(struct gem_pe_arm64x_image *image);
 /* Produces an independent immutable metadata copy. */
 enum gem_pe_status gem_pe_arm64x_image_clone(const struct gem_pe_arm64x_image *image,

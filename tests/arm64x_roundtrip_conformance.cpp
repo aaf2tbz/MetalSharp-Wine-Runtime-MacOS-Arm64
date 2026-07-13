@@ -1620,6 +1620,58 @@ int main(int argc, char **argv) {
         gem_hybrid_runtime_destroy(runtime);
     }
 
+    /* Wine-facing coordinator: helper dispatch is discovered from the linked
+     * metadata slots, transition frames survive one-instruction budget stops,
+     * and only the exact captured native caller is exposed to the bridge. */
+    {
+        struct GenericCase {
+            const char *entry;
+            std::uint64_t expected;
+            std::uint32_t expected_depth;
+        };
+        const std::array<GenericCase, 2> cases{{
+            {"direct", native.direct_result, 1U},
+            {"boundedNested", native.nested_result, 2U},
+        }};
+        for (const auto &test : cases) {
+            gem_hybrid_runtime *runtime =
+                gem_hybrid_runtime_create(harness.memory, metadata, &config);
+            auto context = initial_context(config.loaded_base + entries.at(test.entry));
+            std::uint32_t maximum_depth = 0U;
+            context.x[0] = 10U;
+            assert(runtime);
+            for (unsigned segment = 0; segment < 10000U; ++segment) {
+                gem_hybrid_roundtrip_stats stats{};
+                const auto reason = gem_hybrid_runtime_run(runtime, &context, 1U, &stats);
+                maximum_depth = std::max(maximum_depth, stats.maximum_frame_depth);
+                if (reason == GEM_STOP_BUDGET_EXPIRED) {
+                    context.stop_reason = GEM_STOP_NONE;
+                    continue;
+                }
+                if (reason != GEM_STOP_ARCH_TRANSITION || context.pc != kHostReturn ||
+                    context.x[0] != test.expected)
+                    std::fprintf(
+                        stderr,
+                        "generic %s reason=%u pc=%llx x0=%llu isa=%u cookie=%llu "
+                        "arm=%llu x64=%llu depth=%u max=%u\n",
+                        test.entry, static_cast<unsigned>(reason),
+                        static_cast<unsigned long long>(context.pc),
+                        static_cast<unsigned long long>(context.x[0]), context.isa,
+                        static_cast<unsigned long long>(context.transition_cookie),
+                        static_cast<unsigned long long>(stats.arm64ec_instructions_retired),
+                        static_cast<unsigned long long>(stats.x64_instructions_retired),
+                        stats.final_frame_depth, stats.maximum_frame_depth);
+                assert(reason == GEM_STOP_ARCH_TRANSITION && context.pc == kHostReturn &&
+                       context.isa == GEM_ISA_ARM64EC && context.transition_cookie == 0U &&
+                       context.x[0] == test.expected && stats.final_frame_depth == 0U);
+                break;
+            }
+            assert(context.pc == kHostReturn && maximum_depth == test.expected_depth);
+            assert_stop(runtime, GEM_STOP_ARCH_TRANSITION, GEM_HYBRID_STOP_SOURCE_BROKER);
+            gem_hybrid_runtime_destroy(runtime);
+        }
+    }
+
     for (std::size_t i = 0; i < immutable_pages.size(); ++i) {
         std::array<std::uint8_t, GEM_GUEST_PAGE_SIZE> after{};
         assert(gem_memory_read(harness.memory, immutable_page_addresses[i], after.data(),

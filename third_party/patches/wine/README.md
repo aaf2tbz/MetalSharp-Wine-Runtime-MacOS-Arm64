@@ -64,6 +64,20 @@ is not a release input.
      the syscall-return dispatcher;
    - preserves strict ordinary thread teardown while allowing the immediately
      terminating host process to reclaim its currently executing GEM runtime.
+9. `0009-ntdll-complete-gem-fault-suspend-boundaries.patch`
+   - synchronizes post-fault protection at Wine's committed 4 KiB guest-page
+     granularity on a 16 KiB Darwin host page;
+   - routes native GEM suspension through a lock-free cooperative engine stop.
+10. `0010-ntdll-register-arm64x-images-with-gem.patch`
+    - sends every mapped ARM64X image to GEM only after Wine installs its exact
+      checker, call, jump, and return helper addresses;
+    - atomically promotes deferred registrations after mappings and helper
+      exports are complete, including ntdll and xtajit;
+    - routes ARM64X metadata redirections and helper SVC boundaries through
+      the process-wide hybrid coordinator while preserving Wine syscall,
+      callback, suspension, exception, and return state;
+    - fails closed when validated metadata cannot be attached or execution
+      violates the bounded transition contract.
 
 ## Current evidence and limitation
 
@@ -82,11 +96,13 @@ teardown, and process teardown paths. Normal Darwin ARM64 startup enters PE
 diagnostic evidence, while the clean command below remains authoritative.
 
 Local build trees and prefixes are not release inputs. The clean build command
-now owns the issue #23 runtime gate: it initializes one fresh prefix with
+owns the integrated runtime gate: it initializes one fresh prefix with
 bounded `wineboot --init`, runs native ARM64 `cmd.exe /c exit` through that
 prefix, samples both process trees, rejects non-ARM64 Mach-O executables, and
-hashes the resulting logs and process evidence. Hybrid, sanitizer,
-reproducibility, and final release packaging remain later integration stages.
+hashes the resulting logs and process evidence. The same staged runtime also
+completed the authentic linked ARM64X DLL/x64-host fixture through GEM with a
+zero exit status. Sanitizer, reproducibility, and final release packaging
+remain separately gated stages.
 
 ## Clean build entrypoint
 

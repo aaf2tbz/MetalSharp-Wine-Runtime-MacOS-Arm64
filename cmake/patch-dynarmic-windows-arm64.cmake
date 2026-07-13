@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Apply the two local compatibility changes required by the pinned Dynarmic
+# Apply the local compatibility changes required by the pinned Dynarmic
 # source.  Keep each replacement fail-closed so a dependency update cannot
 # silently carry stale integration assumptions.
 #
@@ -185,5 +185,65 @@ elseif(link_offset EQUAL -1 OR NOT link_new_offset EQUAL -1)
 endif()
 if(NOT link_already_patched)
     string(REPLACE "${link_old}" "${link_new}" a64_terminal_contents "${a64_terminal_contents}")
+    file(WRITE "${a64_terminal_source}" "${a64_terminal_contents}")
+endif()
+
+# MSVC's ARM64 support library probes CurrentEL before selecting its user-mode
+# KUSER_SHARED_DATA feature path. Dynarmic 6.7 otherwise emits an Interpret
+# terminal for this architecturally defined register, which its native ARM64
+# backend cannot lower. Model the exact Windows user-mode semantic (EL0) and
+# leave every other unknown or privileged system register fail-closed.
+set(system_source "${DYNARMIC_SOURCE_DIR}/src/dynarmic/frontend/A64/translate/impl/system.cpp")
+file(READ "${system_source}" system_contents)
+set(currentel_enum_old [=[enum class SystemRegisterEncoding : u32 {
+    // Counter-timer Frequency register]=])
+set(currentel_enum_new [=[enum class SystemRegisterEncoding : u32 {
+    // Current Exception Level. User-mode Windows guests always execute at EL0.
+    CurrentEL = 0b11'0100'000'010'0010,
+    // Counter-timer Frequency register]=])
+set(currentel_case_old [=[    switch (sys_reg) {
+    case SystemRegisterEncoding::CNTFRQ_EL0:]=])
+set(currentel_case_new [=[    switch (sys_reg) {
+    case SystemRegisterEncoding::CurrentEL:
+        X(64, Rt, ir.Imm64(0));
+        return true;
+    case SystemRegisterEncoding::CNTFRQ_EL0:]=])
+string(FIND "${system_contents}" "${currentel_enum_old}" currentel_enum_offset)
+string(FIND "${system_contents}" "${currentel_enum_new}" currentel_enum_new_offset)
+string(FIND "${system_contents}" "${currentel_case_old}" currentel_case_offset)
+string(FIND "${system_contents}" "${currentel_case_new}" currentel_case_new_offset)
+if(currentel_enum_offset EQUAL -1 AND currentel_case_offset EQUAL -1 AND
+   NOT currentel_enum_new_offset EQUAL -1 AND NOT currentel_case_new_offset EQUAL -1)
+    set(currentel_already_patched TRUE)
+elseif(currentel_enum_offset EQUAL -1 OR currentel_case_offset EQUAL -1 OR
+       NOT currentel_enum_new_offset EQUAL -1 OR NOT currentel_case_new_offset EQUAL -1)
+    message(FATAL_ERROR "pinned Dynarmic CurrentEL text changed or is partially patched")
+endif()
+if(NOT currentel_already_patched)
+    string(REPLACE "${currentel_enum_old}" "${currentel_enum_new}" system_contents "${system_contents}")
+    string(REPLACE "${currentel_case_old}" "${currentel_case_new}" system_contents "${system_contents}")
+    file(WRITE "${system_source}" "${system_contents}")
+endif()
+
+# Keep the native backend's unsupported-instruction failure closed, but report
+# the exact guest PC so an authentic fixture can drive the next narrow semantic
+# addition without turning a translation failure into an opaque Wine abort.
+file(READ "${a64_terminal_source}" a64_terminal_contents)
+set(interpret_old [=[void EmitA64Terminal(oaknut::CodeGenerator&, EmitContext&, IR::Term::Interpret, IR::LocationDescriptor, bool) {
+    ASSERT_FALSE("Interpret should never be emitted.");
+}]=])
+set(interpret_new [=[void EmitA64Terminal(oaknut::CodeGenerator&, EmitContext&, IR::Term::Interpret terminal, IR::LocationDescriptor, bool) {
+    ASSERT_MSG(false, "Interpret should never be emitted at guest PC {:016x}.",
+               A64::LocationDescriptor{terminal.next}.PC());
+}]=])
+string(FIND "${a64_terminal_contents}" "${interpret_old}" interpret_offset)
+string(FIND "${a64_terminal_contents}" "${interpret_new}" interpret_new_offset)
+if(interpret_offset EQUAL -1 AND NOT interpret_new_offset EQUAL -1)
+    set(interpret_already_patched TRUE)
+elseif(interpret_offset EQUAL -1 OR NOT interpret_new_offset EQUAL -1)
+    message(FATAL_ERROR "pinned Dynarmic Interpret diagnostic text changed or is partially patched")
+endif()
+if(NOT interpret_already_patched)
+    string(REPLACE "${interpret_old}" "${interpret_new}" a64_terminal_contents "${a64_terminal_contents}")
     file(WRITE "${a64_terminal_source}" "${a64_terminal_contents}")
 endif()

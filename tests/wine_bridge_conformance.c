@@ -230,6 +230,9 @@ int main(void) {
     assert(process == NULL);
     assert(gem_wine_process_create(&process_config, &process) == GEM_WINE_OK);
     assert(process != NULL);
+    assert(gem_wine_process_prepare_arm64ec(NULL) == GEM_WINE_INVALID_ARGUMENT);
+    assert(gem_wine_process_prepare_arm64ec(process) == GEM_WINE_OK);
+    assert(gem_wine_process_prepare_arm64ec(process) == GEM_WINE_OK);
     churn.process = process;
     churn.host_page = host_page;
     atomic_init(&churn.failed, 0);
@@ -280,6 +283,7 @@ int main(void) {
     assert(thread == NULL);
     assert(gem_wine_thread_create(process, &thread_config, &thread) == GEM_WINE_OK);
     assert(thread != NULL);
+    assert(gem_wine_process_prepare_arm64ec(process) == GEM_WINE_OK);
     for (churn_index = 0U; churn_index < 16U; ++churn_index) {
         upper_simd[churn_index].lo = UINT64_C(0x1111000000000000) + churn_index;
         upper_simd[churn_index].hi = UINT64_C(0xeeee000000000000) + churn_index;

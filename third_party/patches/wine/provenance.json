@@ -69,6 +69,13 @@
       "sha256": "876ce98daf1ce1b7b69764c3a66f014de2b72084b75f56106449d583ed1a3b8f",
       "authoringCommit": "29a7e2aa64cbf5570e64fdf487f073e97d1e1060",
       "purpose": "Synchronize post-fault protections per committed 4 KiB guest page and route native GEM thread suspension through a lock-free cooperative engine boundary."
+    },
+    {
+      "order": 10,
+      "path": "third_party/patches/wine/0010-ntdll-register-arm64x-images-with-gem.patch",
+      "sha256": "1f691704db9c2b5a987ab503036eb8fa724afb6f4488a66f5393c3842e4e34a5",
+      "authoringCommit": "bc43cd00ae0f63c9f3cc6f6f087e6cc3ec8621fe",
+      "purpose": "Register validated mapped ARM64X images process-wide, route metadata redirections and helper SVC boundaries through GEM, and preserve Wine syscall, callback, suspension, and return contracts."
     }
   ],
   "researchEvidence": {
