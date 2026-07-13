@@ -276,8 +276,7 @@ import time
 prefix, wineprefix, evidence = map(pathlib.Path, sys.argv[1:])
 wineprefix.mkdir()
 env = os.environ.copy()
-env.update({"WINEDEBUG": "+gem,-all", "WINE_GEM_LAUNCH_TRACE": "1",
-            "WINEPREFIX": str(wineprefix)})
+env.update({"WINE_GEM_LAUNCH_TRACE": "1", "WINEPREFIX": str(wineprefix)})
 libproc = ctypes.CDLL("/usr/lib/libproc.dylib")
 libproc.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
 libproc.proc_pidpath.restype = ctypes.c_int
@@ -349,11 +348,13 @@ def sample(stop, root_pid, destination):
             stream.flush()
             stop.wait(0.25)
 
-def run(name, argv, timeout):
+def run(name, argv, timeout, trace_gem=False):
     log = evidence / f"{name}.log"
     tree = evidence / f"{name}-process-tree.log"
+    run_env = env.copy()
+    run_env["WINEDEBUG"] = "+gem,-all" if trace_gem else "-all"
     with log.open("w", encoding="utf-8") as output:
-        process = subprocess.Popen(argv, env=env, stdout=output, stderr=subprocess.STDOUT,
+        process = subprocess.Popen(argv, env=run_env, stdout=output, stderr=subprocess.STDOUT,
                                    start_new_session=True, text=True)
         stop = threading.Event()
         sampler = threading.Thread(target=sample, args=(stop, process.pid, tree), daemon=True)
@@ -371,16 +372,19 @@ def run(name, argv, timeout):
         finally:
             stop.set()
             sampler.join(timeout=5)
+    if log.stat().st_size > 2 * 1024 * 1024:
+        raise SystemExit(f"{name} exceeded the 2 MiB log bound")
     if returncode:
         raise SystemExit(f"{name} failed with rc={returncode}; see {log}")
     return log
 
 try:
-    wineboot_log = run("wineboot", [str(prefix / "bin/wineboot"), "--init"], 1800)
+    wineboot_log = run("wineboot", [str(prefix / "bin/wineboot"), "--init"], 60,
+                       trace_gem=True)
     gem_acceptance_log = run(
-        "gem-acceptance",
-        [str(prefix / "bin/wine"), "metalsharp-gem-acceptance.exe"], 120)
-    cmd_log = run("cmd", [str(prefix / "bin/wine"), "cmd.exe", "/c", "exit"], 600)
+        "gem-acceptance", [str(prefix / "bin/wine"), "metalsharp-gem-acceptance.exe"],
+        120, trace_gem=True)
+    cmd_log = run("cmd", [str(prefix / "bin/wine"), "cmd.exe", "/c", "exit"], 60)
 finally:
     subprocess.run([str(prefix / "bin/wineserver"), "-k"], env=env,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
@@ -475,9 +479,9 @@ value = {"schema": 1, "kind": "wine-foundation", "repositoryCommit": repository_
          "toolchain": {"host": "aarch64-apple-darwin", "uname": text("uname.txt"), "clang": text("clang-version.txt"), "make": text("make-version.txt"), "sdk": text("sdk-version.txt")},
          "acceptance": {"lifecycleProbe": "passed before guest entry",
                         "nativeLaunchContract": "version 1; exact staged builtin PE selected in-process",
-                        "winebootInit": "passed with a fresh prefix within 1800 seconds",
+                        "winebootInit": "passed with a fresh prefix within 60 seconds",
                         "nativeArm64RuntimeProbe": "continued access violation; consumed guard; created, suspended, resumed, and cleanly terminated a guest thread",
-                        "nativeArm64CmdExit": "passed within 600 seconds",
+                        "nativeArm64CmdExit": "passed within 60 seconds",
                         "processAudit": "all observed Mach-O executables are ARM64-only",
                         "evidence": evidence_files,
                         "lifecycleLog": text("gem-lifecycle-probe.log"),

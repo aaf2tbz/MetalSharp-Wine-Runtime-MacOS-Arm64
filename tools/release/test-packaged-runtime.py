@@ -40,8 +40,8 @@ def main() -> None:
     args.evidence.mkdir(parents=True, exist_ok=True)
     prefix = pathlib.Path(tempfile.mkdtemp(prefix="mswr-v0.1-prefix-"))
     env = os.environ.copy()
-    env.update({"WINEPREFIX": str(prefix), "WINEDEBUG": "+gem,-all",
-                "WINE_GEM_LAUNCH_TRACE": "1", "LC_ALL": "C", "LANG": "C"})
+    env.update({"WINEPREFIX": str(prefix), "WINE_GEM_LAUNCH_TRACE": "1",
+                "LC_ALL": "C", "LANG": "C"})
     libproc = ctypes.CDLL("/usr/lib/libproc.dylib")
     libproc.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
     libproc.proc_pidpath.restype = ctypes.c_int
@@ -99,16 +99,20 @@ def main() -> None:
     sampler.start()
     results: list[dict[str, object]] = []
 
-    def run_test(name: str, command: list[str], expected: tuple[str, ...] = ()) -> None:
+    def run_test(name: str, command: list[str], expected: tuple[str, ...] = (),
+                 timeout: int | None = None, trace_gem: bool = False) -> None:
         log = args.evidence / f"{name}.log"
         started = time.monotonic()
+        timeout = args.timeout if timeout is None else min(args.timeout, timeout)
+        run_env = env.copy()
+        run_env["WINEDEBUG"] = "+gem,-all" if trace_gem else "-all"
         with log.open("w", encoding="utf-8") as output:
-            process = subprocess.Popen(command, cwd=selftest, env=env, stdout=output,
+            process = subprocess.Popen(command, cwd=selftest, env=run_env, stdout=output,
                                        stderr=subprocess.STDOUT, start_new_session=True)
             with roots_lock:
                 active_roots.add(process.pid)
             try:
-                returncode = process.wait(timeout=args.timeout)
+                returncode = process.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
                 os.killpg(process.pid, signal.SIGTERM)
                 try:
@@ -116,13 +120,13 @@ def main() -> None:
                 except subprocess.TimeoutExpired:
                     os.killpg(process.pid, signal.SIGKILL)
                     process.wait()
-                fail(f"{name} exceeded {args.timeout} seconds")
+                fail(f"{name} exceeded {timeout} seconds")
             finally:
                 with roots_lock:
                     active_roots.discard(process.pid)
         text = log.read_text(encoding="utf-8", errors="replace")
-        if log.stat().st_size > 16 * 1024 * 1024:
-            fail(f"{name} exceeded the 16 MiB log bound")
+        if log.stat().st_size > 2 * 1024 * 1024:
+            fail(f"{name} exceeded the 2 MiB log bound")
         missing = [marker for marker in expected if marker not in text]
         forbidden = [marker for marker in ("Unhandled EXC_BAD_ACCESS", "GEM execution failed",
                     "boot event wait timed out", "could not load", "status=c0000135",
@@ -131,21 +135,23 @@ def main() -> None:
             fail(f"{name}: rc={returncode}, missing={missing}, forbidden={forbidden}; see {log}")
         results.append({"name": name, "passed": True, "bounded": True,
                         "durationSeconds": round(time.monotonic() - started, 3),
+                        "timeoutSeconds": timeout,
                         "logSha256": __import__("hashlib").sha256(log.read_bytes()).hexdigest()})
 
     try:
         run_test("wineboot-init", [str(runtime / "bin/wineboot"), "--init"],
-                 ("native ARM64 GEM launch image=",))
+                 ("native ARM64 GEM launch image=",), timeout=60, trace_gem=True)
         run_test("arm64-gem-acceptance", [str(wine), "metalsharp-gem-acceptance.exe"],
-                 ("metalsharp-gem-acceptance: passed", "boundary syscall"))
+                 ("metalsharp-gem-acceptance: passed", "boundary syscall"),
+                 timeout=120, trace_gem=True)
         run_test("arm64-cmd-exit", [str(wine), "cmd.exe", "/c", "exit"],
-                 ("native ARM64 GEM launch image=",))
+                 ("native ARM64 GEM launch image=",), timeout=60)
         run_test("arm64ec-x64-hybrid", [str(wine), str(selftest / "arm64x_fixture_host.exe")],
-                 ("ARM64X linked fixture native execution passed",))
+                 ("ARM64X linked fixture native execution passed",), timeout=120)
         for index in range(args.stress_iterations):
             run_test(f"hybrid-stress-{index + 1:03d}",
                      [str(wine), str(selftest / "arm64x_fixture_host.exe")],
-                     ("ARM64X linked fixture native execution passed",))
+                     ("ARM64X linked fixture native execution passed",), timeout=120)
     finally:
         subprocess.run([str(wineserver), "-k"], env=env, stdout=subprocess.DEVNULL,
                        stderr=subprocess.DEVNULL, timeout=30, check=False)
@@ -171,7 +177,7 @@ def main() -> None:
         fail("fresh test prefix survived cleanup")
     summary = {"schema": 1, "passed": True, "freshPrefix": True,
                "stressIterations": args.stress_iterations, "timeoutSeconds": args.timeout,
-               "logLimitBytes": 16 * 1024 * 1024, "tests": results,
+               "logLimitBytes": 2 * 1024 * 1024, "tests": results,
                "processAudit": {"allNativeArm64": True, "translatedProcesses": [],
                                 "executables": [{"path": key, "kind": observed[key]}
                                                 for key in sorted(observed)]},
