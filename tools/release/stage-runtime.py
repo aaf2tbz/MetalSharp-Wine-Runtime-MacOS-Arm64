@@ -302,10 +302,15 @@ def scrub_embedded_prefixes(package: Path) -> None:
             for match in reversed(list(pattern.finditer(data))):
                 original = match.group()
                 replacement = b"/dev/null"
-                for suffix in (b"/share/wine", b"/lib/wine", b"/bin", b"/lib"):
-                    if original.endswith(suffix):
-                        replacement = suffix.removeprefix(b"/")
+                for marker in (b"/share/wine", b"/lib/wine"):
+                    if marker in original:
+                        replacement = original[original.rfind(marker) + 1:]
                         break
+                else:
+                    for suffix in (b"/bin", b"/lib"):
+                        if original.endswith(suffix):
+                            replacement = suffix.removeprefix(b"/")
+                            break
                 if original.startswith(b"/opt/homebrew"):
                     if b"xdg" in original.lower():
                         replacement = b"/etc/xdg"
