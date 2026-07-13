@@ -155,11 +155,14 @@ class Environment final : public Dynarmic::A64::UserCallbacks {
         }
         /* Clearing Dynarmic's code cache from inside a generated-code memory
          * callback can invalidate the block that is still executing. Defer
-         * invalidation until Step() has returned, and only invalidate for
-         * self-modifying writes to executable guest memory. */
-        const bool executable = gem_memory_is_executable(runtime->memory, vaddr, bytes.size());
-        cache_dirty = cache_dirty || executable;
-        if (executable && jit != nullptr)
+         * invalidation until Step() has returned. Strict ARM64EC execution
+         * preserves its per-write boundary; native execution only invalidates
+         * for self-modifying writes to executable guest memory. */
+        const bool invalidate =
+            runtime->config.execution_profile != GEM_ARM64EC_PROFILE_NATIVE_ARM64 ||
+            gem_memory_is_executable(runtime->memory, vaddr, bytes.size());
+        cache_dirty = cache_dirty || invalidate;
+        if (invalidate && jit != nullptr)
             jit->HaltExecution(Dynarmic::HaltReason::CacheInvalidation);
     }
 
@@ -327,9 +330,11 @@ class Environment final : public Dynarmic::A64::UserCallbacks {
             SetFault(vaddr, GEM_ARM64EC_ACCESS_WRITE, error);
             return;
         }
-        const bool executable = gem_memory_is_executable(runtime->memory, vaddr, bytes.size());
-        cache_dirty = cache_dirty || executable;
-        if (executable && jit != nullptr)
+        const bool invalidate =
+            runtime->config.execution_profile != GEM_ARM64EC_PROFILE_NATIVE_ARM64 ||
+            gem_memory_is_executable(runtime->memory, vaddr, bytes.size());
+        cache_dirty = cache_dirty || invalidate;
+        if (invalidate && jit != nullptr)
             jit->HaltExecution(Dynarmic::HaltReason::CacheInvalidation);
     }
 
@@ -815,7 +820,8 @@ extern "C" enum gem_stop_reason gem_arm64ec_dynarmic_run(struct gem_arm64ec_runt
         if (HasHalt(halt, Dynarmic::HaltReason::MemoryAbort)) {
             RestoreSnapshot(jit, before);
             ExportContext(jit, *runtime, *context);
-            if (backend.env.pending_access != GEM_ARM64EC_ACCESS_NONE) {
+            if (runtime->config.execution_profile == GEM_ARM64EC_PROFILE_NATIVE_ARM64 &&
+                backend.env.pending_access != GEM_ARM64EC_ACCESS_NONE) {
                 SetStopInfo(*runtime, GEM_STOP_MEMORY_FAULT, retired, pc_before,
                             backend.env.pending_access, backend.env.pending_memory_error,
                             backend.env.pending_engine_status);
