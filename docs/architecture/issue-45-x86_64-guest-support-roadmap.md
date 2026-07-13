@@ -43,16 +43,16 @@ extend their explicit interfaces and keep their existing tests green.
 
 ### Phase 1 — isolate the x86_64 product boundary
 
-- [ ] Build the existing x64 sources as a dedicated `metalsharp_gem_x86_64`
+- [x] Build the existing x64 sources as a dedicated `metalsharp_gem_x86_64`
       target with a versioned public ABI rather than folding the backend into
       the baseline GEM archive.
-- [ ] Add checked PE-machine architecture dispatch and reject malformed,
+- [x] Add checked PE-machine architecture dispatch and reject malformed,
       ambiguous, i386, ARM64, and ARM64EC inputs at the x86_64 boundary.
-- [ ] Keep Blink headers, `Machine`, JIT state, host pointers, and
+- [x] Keep Blink headers, `Machine`, JIT state, host pointers, and
       x86_64-specific policy private to the implementation.
-- [ ] Preserve the canonical AArch64/ARM64EC context ABI and demonstrate that
+- [x] Preserve the canonical AArch64/ARM64EC context ABI and demonstrate that
       baseline libraries do not acquire an unconditional Blink dependency.
-- [ ] Add lifecycle, reentrancy, context, memory, classification, unsupported,
+- [x] Add lifecycle, reentrancy, context, memory, classification, unsupported,
       and teardown conformance tests.
 
 ### Phase 2 — add a sound embedded Blink JIT

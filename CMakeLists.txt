@@ -11,7 +11,7 @@ option(MSWR_ENGINE_DYNARMIC "Use Dynarmic as the ARM64EC correctness engine back
 option(MSWR_ENGINE_CONFORMANCE "Build ARM64EC engine conformance tests" OFF)
 option(MSWR_ZERO_ROSETTA_AUDIT "Build/run native ARM64 macOS zero-Rosetta audit tests" OFF)
 option(MSWR_FETCH_DYNARMIC "Fetch the pinned Dynarmic dependency when engine support is enabled" ON)
-option(MSWR_ENABLE_X64_ENGINE "Build pinned Blink's interpreter-only GEM adapter" OFF)
+option(MSWR_ENABLE_X64_ENGINE "Build the isolated GEM x86_64 architecture runtime" OFF)
 option(MSWR_X64_ENGINE_CONFORMANCE "Build x64 engine conformance tests" OFF)
 option(MSWR_BUILD_WINE_BRIDGE "Build the versioned native Wine/GEM bridge dylib" OFF)
 option(MSWR_WINE_BRIDGE_CONFORMANCE "Build Wine/GEM bridge conformance tests" OFF)
@@ -179,12 +179,21 @@ if(MSWR_ENABLE_X64_ENGINE)
     set_target_properties(blink_gem_archive PROPERTIES
         IMPORTED_LOCATION "${blink_gem_SOURCE_DIR}/o/blink/blink.a")
     add_dependencies(blink_gem_archive blink_gem_build)
-    target_sources(metalsharp_gem PRIVATE src/gem/x64_engine.c src/gem/x64_blink.c)
+    add_library(metalsharp_gem_x86_64 STATIC
+        src/gem/x86_64.c
+        src/gem/x64_engine.c
+        src/gem/x64_blink.c)
     if(MSWR_ENABLE_ARM64EC_ENGINE)
-        target_sources(metalsharp_gem PRIVATE src/gem/hybrid_runtime.c)
+        target_sources(metalsharp_gem_x86_64 PRIVATE src/gem/hybrid_runtime.c)
     endif()
-    target_include_directories(metalsharp_gem PRIVATE "${blink_gem_SOURCE_DIR}")
-    target_link_libraries(metalsharp_gem PRIVATE blink_gem_archive m)
+    target_include_directories(metalsharp_gem_x86_64
+        PUBLIC include
+        PRIVATE "${blink_gem_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/src/gem")
+    target_compile_features(metalsharp_gem_x86_64 PUBLIC c_std_11)
+    target_link_libraries(metalsharp_gem_x86_64
+        PUBLIC metalsharp_gem
+        PRIVATE blink_gem_archive m)
+    mswr_enable_warnings(metalsharp_gem_x86_64)
 elseif(MSWR_X64_ENGINE_CONFORMANCE)
     message(FATAL_ERROR "MSWR_X64_ENGINE_CONFORMANCE requires MSWR_ENABLE_X64_ENGINE")
 endif()
@@ -193,9 +202,10 @@ mswr_enable_warnings(metalsharp_gem)
 if(MSWR_BUILD_WINE_BRIDGE)
     if(NOT MSWR_ENABLE_ARM64EC_ENGINE OR NOT MSWR_ENABLE_X64_ENGINE)
         message(FATAL_ERROR
-            "MSWR_BUILD_WINE_BRIDGE requires both ARM64EC and interpreter-only x64 engines")
+            "MSWR_BUILD_WINE_BRIDGE requires both ARM64EC and isolated x86_64 engines")
     endif()
     set_property(TARGET metalsharp_gem PROPERTY POSITION_INDEPENDENT_CODE ON)
+    set_property(TARGET metalsharp_gem_x86_64 PROPERTY POSITION_INDEPENDENT_CODE ON)
     add_library(metalsharp_gem_wine SHARED src/gem/wine_bridge.c)
     if(APPLE)
         target_sources(metalsharp_gem_wine PRIVATE src/gem/macos_fd_compat.c)
@@ -203,7 +213,8 @@ if(MSWR_BUILD_WINE_BRIDGE)
     target_include_directories(metalsharp_gem_wine PUBLIC include)
     target_compile_features(metalsharp_gem_wine PUBLIC c_std_11)
     target_compile_definitions(metalsharp_gem_wine PRIVATE GEM_WINE_BUILD=1)
-    target_link_libraries(metalsharp_gem_wine PRIVATE metalsharp_gem Threads::Threads)
+    target_link_libraries(metalsharp_gem_wine
+        PRIVATE metalsharp_gem_x86_64 metalsharp_gem Threads::Threads)
     set_target_properties(metalsharp_gem_wine PROPERTIES
         OUTPUT_NAME "metalsharp-gem-wine"
         VERSION "0.1.0"
@@ -220,7 +231,10 @@ if(MSWR_BUILD_WINE_BRIDGE)
         COMPONENT metalsharp-gem-wine)
     install(FILES
         include/metalsharp/gem/context.h
+        include/metalsharp/gem/context_conversion.h
         include/metalsharp/gem/wine_bridge.h
+        include/metalsharp/gem/x64_engine.h
+        include/metalsharp/gem/x86_64.h
         DESTINATION include/metalsharp/gem
         COMPONENT metalsharp-gem-wine)
 elseif(MSWR_WINE_BRIDGE_CONFORMANCE)
@@ -298,8 +312,14 @@ if(BUILD_TESTING)
     endif()
 
     if(MSWR_X64_ENGINE_CONFORMANCE)
+        add_executable(x86_64_architecture_test tests/x86_64_architecture_test.c)
+        target_link_libraries(x86_64_architecture_test PRIVATE metalsharp_gem_x86_64)
+        mswr_enable_warnings(x86_64_architecture_test)
+        add_test(NAME gem.x86_64_architecture COMMAND x86_64_architecture_test)
+        set_tests_properties(gem.x86_64_architecture PROPERTIES LABELS "zero-rosetta;gem.x86_64")
+
         add_executable(x64_engine_conformance tests/x64_engine_conformance.cpp)
-        target_link_libraries(x64_engine_conformance PRIVATE metalsharp_gem)
+        target_link_libraries(x64_engine_conformance PRIVATE metalsharp_gem_x86_64)
         target_include_directories(x64_engine_conformance PRIVATE "${blink_gem_SOURCE_DIR}"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/gem")
         target_compile_features(x64_engine_conformance PRIVATE cxx_std_17)
@@ -323,7 +343,8 @@ if(BUILD_TESTING)
             message(FATAL_ERROR "Issue #14 artifact directory is missing validated inputs")
         endif()
         add_executable(arm64x_roundtrip_conformance tests/arm64x_roundtrip_conformance.cpp)
-        target_link_libraries(arm64x_roundtrip_conformance PRIVATE metalsharp_gem)
+        target_link_libraries(arm64x_roundtrip_conformance
+            PRIVATE metalsharp_gem_x86_64 metalsharp_gem)
         target_include_directories(arm64x_roundtrip_conformance PRIVATE
             "${CMAKE_CURRENT_SOURCE_DIR}/src/gem" "${blink_gem_SOURCE_DIR}")
         target_compile_features(arm64x_roundtrip_conformance PRIVATE cxx_std_17)
@@ -334,7 +355,8 @@ if(BUILD_TESTING)
             LABELS "zero-rosetta;gem.engine;authentic-arm64x")
         if(APPLE AND MSWR_BUILD_WINE_BRIDGE)
             add_executable(wine_arm64x_conformance tests/wine_arm64x_conformance.cpp)
-            target_link_libraries(wine_arm64x_conformance PRIVATE metalsharp_gem_wine metalsharp_gem)
+            target_link_libraries(wine_arm64x_conformance
+                PRIVATE metalsharp_gem_wine metalsharp_gem_x86_64 metalsharp_gem)
             target_compile_features(wine_arm64x_conformance PRIVATE cxx_std_17)
             mswr_enable_warnings(wine_arm64x_conformance)
             add_test(NAME gem.wine_arm64x_conformance COMMAND wine_arm64x_conformance
@@ -378,6 +400,7 @@ if(BUILD_TESTING)
         context_conversion_test context_serialization_test memory_test
         memory_page_isolation_test macos_tso_api_probe
         arm64ec_engine_conformance wine_bridge_conformance x64_engine_conformance
+        x86_64_architecture_test
         arm64x_roundtrip_conformance wine_arm64x_conformance
         arm64ec_engine_zero_rosetta arm64ec_target_test
         pe_arm64x_test pe_arm64x_malformed_test pe_arm64x_fuzz_test

@@ -10,6 +10,7 @@
 #include "metalsharp/gem/pe_arm64x_loader.h"
 #include "metalsharp/gem/wine_bridge.h"
 #include "metalsharp/gem/x64_engine.h"
+#include "metalsharp/gem/x86_64.h"
 
 #include <type_traits>
 
