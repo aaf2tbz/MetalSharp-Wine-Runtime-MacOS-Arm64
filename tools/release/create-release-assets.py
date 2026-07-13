@@ -8,6 +8,7 @@ import datetime
 import hashlib
 import json
 import os
+import re
 import stat
 import subprocess
 import tarfile
@@ -18,6 +19,8 @@ from pathlib import Path
 VERSION = "0.1.0"
 ARCHIVE = "metalsharp-wine-v0.1.0-macos-arm64.tar.zst"
 TOP = "metalsharp-wine-v0.1.0-macos-arm64"
+PRIVATE_TOOLCHAIN_PATH = re.compile(
+    r"/(?:Users|home|private/var|opt/homebrew|usr/local/Cellar)(?:/[^\s]*)?")
 
 
 def fail(message: str) -> None:
@@ -40,6 +43,15 @@ def canonical(path: Path, value: object) -> None:
 
 def sha_record(path: Path) -> dict[str, object]:
     return {"path": path.name, "sha256": digest(path)}
+
+
+def portable_toolchain_identity(value: object, name: str) -> str:
+    if not isinstance(value, str):
+        fail(f"foundation manifest {name} identity is invalid")
+    line = next((item.strip() for item in value.splitlines() if item.strip()), "")
+    if not line:
+        fail(f"foundation manifest {name} identity is empty")
+    return PRIVATE_TOOLCHAIN_PATH.sub("<private-path>", line)
 
 
 def inventory(root: Path) -> list[dict[str, object]]:
@@ -239,8 +251,10 @@ Verify the archive with the adjacent SHA-256 file before unpacking. See `KNOWN-L
                                "gem_wine_thread_set_native_upper_simd"]},
                 "toolchain": {"host": "aarch64-apple-darwin",
                               "peArchitectures": ["i386", "x86_64", "aarch64", "arm64ec"],
-                              "clang": foundation["toolchain"]["clang"],
-                              "make": foundation["toolchain"]["make"],
+                              "clang": portable_toolchain_identity(
+                                  foundation["toolchain"]["clang"], "clang"),
+                              "make": portable_toolchain_identity(
+                                  foundation["toolchain"]["make"], "make"),
                               "sdk": foundation["toolchain"]["sdk"],
                               "wineConfigure": foundation["wine"]["configure"],
                               "llvmMingw": lock["build_dependencies"]["llvm_mingw"],
