@@ -8,3 +8,5 @@
 0008-darwin-arm64-add-native-gem-launch-contract.patch
 0009-ntdll-complete-gem-fault-suspend-boundaries.patch
 0010-ntdll-register-arm64x-images-with-gem.patch
+0011-setupapi-add-bounded-native-bootstrap-mode.patch
+0012-ntdll-preserve-hybrid-budget-context.patch

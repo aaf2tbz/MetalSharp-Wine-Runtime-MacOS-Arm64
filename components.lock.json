@@ -84,6 +84,14 @@
         {
           "path": "third_party/patches/wine/0010-ntdll-register-arm64x-images-with-gem.patch",
           "sha256": "5d4e49b4ed81f0d8553452d568385ed2dfdb73c42b619b5e26cc0e0e9985d704"
+        },
+        {
+          "path": "third_party/patches/wine/0011-setupapi-add-bounded-native-bootstrap-mode.patch",
+          "sha256": "f9f1a3c48fb23fd607514b116842a46cc3f69a4690954d3248a00e5c2270e038"
+        },
+        {
+          "path": "third_party/patches/wine/0012-ntdll-preserve-hybrid-budget-context.patch",
+          "sha256": "fc0b6209107195ac921a6f06909098fb2b520d42c8533fe92f2a7ec27e2711a9"
         }
       ]
     },

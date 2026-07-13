@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import stat
+import struct
 import subprocess
 from pathlib import Path
 
@@ -171,7 +172,7 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 export WINELOADER="$root/bin/.wine-real"
 export WINESERVER="$root/bin/.wineserver-real"
-export WINEDLLPATH="$root/lib/wine/aarch64-unix:$root/lib/wine/aarch64-windows"
+export WINEDLLPATH="$root/lib/wine"
 export WINEDATADIR="$root/share/wine"
 export VK_ICD_FILENAMES="$root/share/vulkan/icd.d/MoltenVK_icd.json"
 export XDG_CONFIG_DIRS="$root/share"
@@ -180,6 +181,96 @@ export DRIRC_CONFIGDIR="$root/share/drirc.d"
 export XLOCALEDIR="$root/share/X11/locale"
 export XERRORDB="$root/share/X11/XErrorDB"
 cd "$root"
+
+prefix_ready()
+{
+    prefix=${WINEPREFIX:-"$HOME/.wine"}
+    for relative in .update-timestamp system.reg user.reg userdef.reg \
+        drive_c/windows/system32/kernel32.dll \
+        drive_c/windows/system32/ntdll.dll \
+        drive_c/windows/system32/services.exe
+    do
+        test -s "$prefix/$relative" || return 1
+    done
+}
+
+recover_wineboot()
+{
+    prefix=${WINEPREFIX:-"$HOME/.wine"}
+    "$root/bin/.wineserver-real" -k >/dev/null 2>&1 || true
+    "$root/bin/.wineserver-real" -w >/dev/null 2>&1 || true
+    inf=$(printf '%s' "$root/share/wine/wine.inf" | sed 's,/,\\\\,g')
+    start_recovery_installer()
+    {
+        (
+            export METALSHARP_WINEBOOT_SKIP_FAKE_REGISTRY=1
+            exec -a "$root/bin/wine" "$root/bin/.wine-real" rundll32.exe \
+                setupapi,InstallHinfSection DefaultInstall 128 "Z:$inf"
+        ) &
+        installer=$!
+    }
+    start_recovery_installer
+    installer_age=0
+    previous=
+    stable=0
+    attempts=0
+    while test "$attempts" -lt 240
+    do
+        if { ! kill -0 "$installer" 2>/dev/null || test "$installer_age" -ge 40; } && ! prefix_ready; then
+            kill "$installer" 2>/dev/null || true
+            wait "$installer" 2>/dev/null || true
+            "$root/bin/.wineserver-real" -k >/dev/null 2>&1 || true
+            "$root/bin/.wineserver-real" -w >/dev/null 2>&1 || true
+            start_recovery_installer
+            installer_age=0
+        fi
+        if prefix_ready; then
+            current=$(stat -f '%z:%m' \
+                "$prefix/.update-timestamp" \
+                "$prefix/system.reg" "$prefix/user.reg" "$prefix/userdef.reg" \
+                "$prefix/drive_c/windows/system32/kernel32.dll" \
+                "$prefix/drive_c/windows/system32/ntdll.dll" \
+                "$prefix/drive_c/windows/system32/services.exe")
+            if test "$current" = "$previous"; then
+                stable=$((stable + 1))
+            else
+                stable=0
+                previous=$current
+            fi
+            test "$stable" -ge 10 && break
+        else
+            stable=0
+        fi
+        attempts=$((attempts + 1))
+        installer_age=$((installer_age + 1))
+        sleep 0.5
+    done
+    kill "$installer" 2>/dev/null || true
+    wait "$installer" 2>/dev/null || true
+    "$root/bin/.wineserver-real" -k >/dev/null 2>&1 || true
+    "$root/bin/.wineserver-real" -w >/dev/null 2>&1 || true
+    prefix_ready
+}
+
+if test "$(basename "$0")" = wineboot; then
+    case " $* " in
+        *" --kill "*|*" --shutdown "*|*" --end-session "*)
+            exec -a "$0" "$root/bin/.wine-real" "$@"
+            ;;
+    esac
+    # The packaged native bootstrap deliberately omits callback-heavy fake-DLL
+    # registry resources on its first pass. Manifests and the complete staged
+    # PE tree remain installed; this is the same bounded mode used by recovery.
+    export METALSHARP_WINEBOOT_SKIP_FAKE_REGISTRY=1
+    initial=0
+    (exec -a "$0" "$root/bin/.wine-real" "$@") || initial=$?
+    if prefix_ready; then
+        exit "$initial"
+    fi
+    recover_wineboot
+    exit 0
+fi
+
 exec -a "$0" "$root/bin/.wine-real" "$@"
 """, encoding="utf-8")
     os.chmod(launcher, 0o755)
@@ -304,12 +395,12 @@ def scrub_embedded_prefixes(package: Path) -> None:
                 replacement = b"/dev/null"
                 for marker in (b"/share/wine", b"/lib/wine"):
                     if marker in original:
-                        replacement = original[original.rfind(marker) + 1:]
+                        replacement = b"/metalsharp/runtime" + original[original.rfind(marker):]
                         break
                 else:
                     for suffix in (b"/bin", b"/lib"):
                         if original.endswith(suffix):
-                            replacement = suffix.removeprefix(b"/")
+                            replacement = b"/metalsharp/runtime" + suffix
                             break
                 if original.startswith(b"/opt/homebrew"):
                     if b"xdg" in original.lower():
@@ -328,18 +419,59 @@ def scrub_embedded_prefixes(package: Path) -> None:
                 run("codesign", "--force", "--sign", "-", "--timestamp=none", str(path))
 
 
-def replace_macos27_fd_imports(data: bytes) -> bytes:
-    """Map SDK 27 descriptor helpers to layout-preserving legacy imports."""
-    return data.replace(b"_pipe2\0", b"_pipe\0\0").replace(b"_dup3\0", b"_dup2\0")
+def rebind_chained_import(data: bytes, symbol: str, target_library: str) -> bytes:
+    """Rebind one format-1 Mach-O chained import without changing file layout."""
+    value = bytearray(data)
+    if len(value) < 32 or struct.unpack_from("<I", value)[0] != 0xfeedfacf:
+        fail("chained import rebinding requires a little-endian 64-bit Mach-O")
+    ncmds = struct.unpack_from("<I", value, 16)[0]
+    offset = 32
+    ordinal = 0
+    target_ordinal: int | None = None
+    fixups: tuple[int, int] | None = None
+    dylib_commands = {0x0c, 0x80000018, 0x8000001f, 0x80000023, 0x20}
+    for _ in range(ncmds):
+        command, size = struct.unpack_from("<II", value, offset)
+        if size < 8 or offset + size > len(value):
+            fail("invalid Mach-O load command while rebinding chained import")
+        if command in dylib_commands:
+            ordinal += 1
+            name_offset = struct.unpack_from("<I", value, offset + 8)[0]
+            start = offset + name_offset
+            end = value.index(0, start, offset + size)
+            if value[start:end].decode() == target_library:
+                target_ordinal = ordinal
+        elif command == 0x80000034:
+            fixups = struct.unpack_from("<II", value, offset + 8)
+        offset += size
+    if target_ordinal is None or fixups is None:
+        fail(f"missing {target_library} dependency or chained fixups")
+    data_offset, _ = fixups
+    _, _, imports_offset, symbols_offset, count, import_format, _ = struct.unpack_from(
+        "<7I", value, data_offset)
+    if import_format != 1:
+        fail(f"unsupported chained import format {import_format}")
+    found = 0
+    encoded = symbol.encode()
+    for index in range(count):
+        entry_offset = data_offset + imports_offset + index * 4
+        entry = struct.unpack_from("<I", value, entry_offset)[0]
+        start = data_offset + symbols_offset + (entry >> 9)
+        end = value.index(0, start)
+        if value[start:end] == encoded:
+            struct.pack_into("<I", value, entry_offset, (entry & ~0xff) | target_ordinal)
+            found += 1
+    if found != 1:
+        fail(f"expected one {symbol} chained import, found {found}")
+    return bytes(value)
 
 
 def normalize_macos15_compatibility(package: Path) -> None:
     """Lower host deployment metadata and remove macOS 27-only FD imports.
 
-    The macOS 27 SDK exposes pipe2 even when Wine's configure probe is building
-    a runtime intended for older hosts. SDK 27 also exposes dup3. ARM64 passes
-    the unused trailing arguments harmlessly to the legacy pipe(2) and dup2(2)
-    entry points. The packaged acceptance test covers startup and teardown.
+    The bridge provides semantic pipe2/dup3 compatibility without requiring
+    those macOS 27 libSystem exports. Native ntdll already loads the bridge, so
+    only its pipe2 chained-import ordinal is rebound; no load command is added.
     """
     for path in sorted(p for p in package.rglob("*") if is_macho(p)):
         changed = False
@@ -354,20 +486,23 @@ def normalize_macos15_compatibility(package: Path) -> None:
             os.chmod(temporary, stat.S_IMODE(path.stat().st_mode))
             os.replace(temporary, path)
             changed = True
-        data = path.read_bytes()
-        compatible = replace_macos27_fd_imports(data)
-        if compatible != data:
-            data = compatible
+        if path.relative_to(package).as_posix() == "lib/wine/aarch64-unix/ntdll.so":
+            data = rebind_chained_import(path.read_bytes(), "_pipe2",
+                                         "@rpath/libmetalsharp-gem-wine.0.dylib")
             path.write_bytes(data)
             changed = True
         if changed:
             run("codesign", "--force", "--sign", "-", "--timestamp=none", str(path))
         undefined = {line.split()[-1] for line in run("nm", "-u", str(path), check=False).splitlines()
                      if line.split()}
-        unsupported = undefined & {"_pipe2", "_dup3"}
-        if unsupported:
-            fail(f"macOS 27-only FD imports survived normalization in {path}: "
-                 f"{sorted(unsupported)}")
+        if "_dup3" in undefined:
+            fail(f"macOS 27-only dup3 import survived normalization in {path}")
+        if "_pipe2" in undefined:
+            imports = run("xcrun", "dyld_info", "-imports", str(path))
+            pipe_lines = [line for line in imports.splitlines() if "_pipe2 " in line]
+            if not pipe_lines or any("(from libmetalsharp-gem-wine)" not in line
+                                     for line in pipe_lines):
+                fail(f"pipe2 is not bound to the compatibility bridge in {path}")
 
 
 def install_selftest(package: Path, foundation: Path, fixture: Path, host: Path,

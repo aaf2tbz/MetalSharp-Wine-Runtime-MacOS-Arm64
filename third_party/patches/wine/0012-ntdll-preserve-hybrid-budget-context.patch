@@ -1,0 +1,50 @@
+From 66220c5789ff3448be17c952b9685b16e89023a9 Mon Sep 17 00:00:00 2001
+From: Avery Felts <averyfelts@users.noreply.github.com>
+Date: Mon, 13 Jul 2026 14:30:00 -0600
+Subject: [PATCH 12/12] ntdll: preserve hybrid context across budget yields
+
+Wine's ARM syscall frame cannot represent GEM's in-flight x64 ISA, transition
+cookie, or original x64 stack pointer.  Keep the complete local GEM context
+across ordinary instruction-budget slices instead of serializing it through
+that lossy frame.  When Wine has a pending suspend, publish only at an ARM64EC
+boundary that the public context machinery can represent.
+
+This patch is distributed under Wine's LGPL-2.1-or-later terms.
+---
+ dlls/ntdll/unix/signal_arm64.c | 19 ++++++++++---------
+ 1 file changed, 10 insertions(+), 9 deletions(-)
+
+diff --git a/dlls/ntdll/unix/signal_arm64.c b/dlls/ntdll/unix/signal_arm64.c
+index 3e7d150..606530f 100644
+--- a/dlls/ntdll/unix/signal_arm64.c
++++ b/dlls/ntdll/unix/signal_arm64.c
+@@ -486,18 +486,21 @@ void DECLSPEC_NORETURN gem_signal_run(void)
+                 gem_context_from_frame( &context, frame, data->teb );
+                 gem_frame_get_upper_simd( data, frame );
+             }
+-            else
++            if (arm64_data->suspend_pending)
+             {
++                /* The ARM syscall frame cannot represent an in-flight x64
++                 * hybrid context. Keep the full GEM context local until it
++                 * returns to ARM64EC, then publish it for Wine's suspend
++                 * machinery. Ordinary budget slices must never round-trip
++                 * through the lossy ARM-only frame. */
++                if (context.isa != GEM_ISA_ARM64EC) continue;
+                 if (!gem_context_to_frame( frame, &context, data->teb )) abort_thread(1);
+                 gem_frame_set_upper_simd( data, frame );
+-            }
+-            if (arm64_data->suspend_pending)
+-            {
+                 NtGetContextThread( GetCurrentThread(), &wine_context );
+                 if (signal_set_full_context( &wine_context )) abort_thread(1);
++                gem_context_from_frame( &context, frame, data->teb );
++                gem_frame_get_upper_simd( data, frame );
+             }
+-            gem_context_from_frame( &context, frame, data->teb );
+-            gem_frame_get_upper_simd( data, frame );
+             continue;
+         }
+         if (status == GEM_WINE_TERMINATED) abort_thread( result.exit_status );
+-- 
+2.50.1

@@ -44,9 +44,17 @@ jobs:
           assets="${RUNNER_TEMP}/metalsharp-wine-v0.1.0-assets"
           mkdir -p "$assets"
           gh release download v0.1.0 --repo "$GITHUB_REPOSITORY" --dir "$assets"
-          test "$(find "$assets" -type f | wc -l | tr -d ' ')" = 2
+          test "$(find "$assets" -type f | wc -l | tr -d ' ')" = 7
+          gh release view v0.1.0 --repo "$GITHUB_REPOSITORY" --json body --jq .body \
+            > "$assets/RELEASE-NOTES.md"
           cd "$assets"
           shasum -a 256 -c metalsharp-wine-v0.1.0-macos-arm64.tar.zst.sha256
+          python3 "$GITHUB_WORKSPACE/tools/release/validate-release-assets.py" \
+            --directory "$assets" --repository "$GITHUB_REPOSITORY" \
+            --commit "$GITHUB_SHA" --version 0.1.0
+          python3 "$GITHUB_WORKSPACE/tools/release/verify-published-release.py" \
+            --directory "$assets" --repository "$GITHUB_REPOSITORY" \
+            --tag v0.1.0 --commit "$GITHUB_SHA"
       - name: Unpack at the accepted Wine build path and run checks
         shell: bash
         run: |
@@ -61,28 +69,39 @@ jobs:
           "$(brew --prefix zstd)/bin/zstd" -d --stdout \
             "$assets/metalsharp-wine-v0.1.0-macos-arm64.tar.zst" | tar -xf - -C "$parent"
           mv "$parent/metalsharp-wine-v0.1.0-macos-arm64" "$runtime"
-          evidence="${RUNNER_TEMP}/published-smoke-evidence"
-          if ! python3 tools/release/test-packaged-runtime.py \
-            --runtime "$runtime" \
-            --evidence "$evidence" \
-            --stress-iterations 1 \
-            --timeout 300; then
-            sw_vers
-            uname -m
-            file "$runtime/bin/wine" "$runtime/lib/wine/aarch64-unix/ntdll.so"
-            vtool -show-build "$runtime/bin/wine"
-            vtool -show-build "$runtime/lib/wine/aarch64-unix/ntdll.so"
-            otool -L "$runtime/bin/wine"
-            otool -L "$runtime/lib/wine/aarch64-unix/ntdll.so"
-            codesign --verify --strict --verbose=2 "$runtime/bin/wine"
-            codesign --verify --strict --verbose=2 "$runtime/lib/wine/aarch64-unix/ntdll.so"
-            while IFS= read -r logfile; do
-              echo "::group::$(basename "$logfile")"
-              cat "$logfile"
-              echo "::endgroup::"
-            done < <(find "$evidence" -maxdepth 1 -type f -name '*.log' -print | sort)
-            exit 1
-          fi
+          python3 tools/release/audit-runtime.py --root "$runtime"
+          for attempt in 1 2 3; do
+            evidence="${RUNNER_TEMP}/published-smoke-evidence-${attempt}"
+            echo "Required clean-prefix run ${attempt}/3"
+            if ! python3 tools/release/test-packaged-runtime.py \
+              --runtime "$runtime" \
+              --evidence "$evidence" \
+              --stress-iterations 1 \
+              --timeout 300; then
+              sw_vers
+              uname -m
+              file "$runtime/bin/wine" "$runtime/lib/wine/aarch64-unix/ntdll.so"
+              vtool -show-build "$runtime/bin/wine"
+              vtool -show-build "$runtime/lib/wine/aarch64-unix/ntdll.so"
+              otool -L "$runtime/bin/wine"
+              otool -L "$runtime/lib/wine/aarch64-unix/ntdll.so"
+              codesign --verify --strict --verbose=2 "$runtime/bin/wine"
+              codesign --verify --strict --verbose=2 "$runtime/lib/wine/aarch64-unix/ntdll.so"
+              while IFS= read -r logfile; do
+                echo "::group::$(basename "$(dirname "$logfile")")/$(basename "$logfile")"
+                cat "$logfile"
+                echo "::endgroup::"
+              done < <(find "${RUNNER_TEMP}" -maxdepth 2 -type f \
+                -path '*/published-smoke-evidence-*/*.log' -print | sort)
+              while IFS= read -r readiness; do
+                echo "::group::$(basename "$(dirname "$readiness")")/$(basename "$readiness")"
+                cat "$readiness"
+                echo "::endgroup::"
+              done < <(find "${RUNNER_TEMP}" -maxdepth 2 -type f \
+                -path '*/published-smoke-evidence-*/wineboot-prefix-readiness.json' -print | sort)
+              exit 1
+            fi
+          done
       - name: Publish the verified unchanged draft
         env:
           GH_TOKEN: ${{ github.token }}

@@ -28,7 +28,7 @@ BRIDGE_EXPORTS = {
     "_gem_wine_process_reserve", "_gem_wine_process_unmap", "_gem_wine_status_name",
     "_gem_wine_thread_create", "_gem_wine_thread_destroy",
     "_gem_wine_thread_get_native_upper_simd", "_gem_wine_thread_request_async_stop",
-    "_gem_wine_thread_run", "_gem_wine_thread_set_native_upper_simd",
+    "_gem_wine_thread_run", "_gem_wine_thread_set_native_upper_simd", "_pipe2",
 }
 
 
@@ -165,10 +165,15 @@ def audit(root: Path, forbidden: list[str]) -> list[dict[str, object]]:
             fail(f"unsupported macOS deployment target in {macho.relative_to(root)}: {target}")
         undefined = {line.split()[-1] for line in command("nm", "-u", str(macho)).splitlines()
                      if line.split()}
-        unsupported = undefined & {"_pipe2", "_dup3"}
-        if unsupported:
-            fail(f"macOS 27-only FD imports in {macho.relative_to(root)}: "
-                 f"{sorted(unsupported)}")
+        if "_dup3" in undefined:
+            fail(f"macOS 27-only dup3 import in {macho.relative_to(root)}")
+        if "_pipe2" in undefined:
+            imports = command("xcrun", "dyld_info", "-imports", str(macho))
+            pipe_lines = [line for line in imports.splitlines() if "_pipe2 " in line]
+            if not pipe_lines or any("(from libmetalsharp-gem-wine)" not in line
+                                     for line in pipe_lines):
+                fail(f"pipe2 is not bound to the compatibility bridge in "
+                     f"{macho.relative_to(root)}")
         for value in rpaths(macho):
             if value.startswith("/"):
                 fail(f"absolute rpath in {macho.relative_to(root)}: {value}")
@@ -184,10 +189,14 @@ def audit(root: Path, forbidden: list[str]) -> list[dict[str, object]]:
     exports = set(command("nm", "-gjU", str(bridge)).splitlines())
     if exports != BRIDGE_EXPORTS:
         fail(f"GEM bridge export allowlist differs: {sorted(exports ^ BRIDGE_EXPORTS)}")
+    # Host build paths are actionable only when the dynamic loader can consume
+    # them.  Data files (notably X11 Compose tables) may legitimately contain
+    # path-shaped text as user input; scanning those creates false positives
+    # without strengthening the host Mach-O closure guarantee.
     scan_terms = [term for term in forbidden if term]
     scan_terms.extend(["/Users/", "/home/runner/", "/opt/homebrew/",
                        "/usr/local/Cellar/", "/private/var/folders/"])
-    for path in sorted(p for p in root.rglob("*") if p.is_file() and not p.is_symlink()):
+    for path in machos:
         output = command("strings", "-a", str(path), check=False)
         for term in scan_terms:
             if term in output:

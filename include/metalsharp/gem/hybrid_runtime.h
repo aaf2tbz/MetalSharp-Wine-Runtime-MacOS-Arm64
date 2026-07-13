@@ -139,6 +139,10 @@ void gem_hybrid_runtime_invalidate_code(struct gem_hybrid_runtime *runtime, uint
                                         uint64_t size);
 bool gem_hybrid_runtime_last_stop_info(const struct gem_hybrid_runtime *runtime,
                                        struct gem_hybrid_stop_info *out_info);
+/* True while a bounded cross-image ARM64EC/x64 frame must resume through this
+ * coordinator. Wine uses this to retain thread-wide ownership across module
+ * transitions instead of selecting a fresh image-local coordinator. */
+bool gem_hybrid_runtime_coordinator_active(const struct gem_hybrid_runtime *runtime);
 
 #ifdef __cplusplus
 }
