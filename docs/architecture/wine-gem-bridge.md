@@ -48,6 +48,12 @@ bound KUSER page. Those allocations must remain live until they are unmapped,
 rebound, or the process is destroyed. Wine may update the KUSER page directly;
 all guest accesses still use GEM's aliases and logical protections.
 
+Native Windows ARM64 has v0-v31 while the fixed ARM64EC context carries
+v0-v15. The native execution profile therefore owns a per-thread v16-v31
+sidecar. Wine synchronizes that sidecar at every callback and bounded run so
+`NtGetContextThread`, `NtSetContextThread`, continuation, and suspend/resume do
+not lose upper SIMD state without changing the 720-byte ABI.
+
 Wine reserves ranges in GEM before publishing committed identity backing.
 Commit, decommit, partial unmap, full release, protection changes, guard and
 WRITECOPY state, and executable invalidation are synchronized through the
@@ -73,10 +79,33 @@ native Windows ARM64 instructions. This profile:
 - snapshots each instruction and rolls it back if it changes canonical `x18`;
 - rejects attachment of an ARM64X metadata map.
 
-This profile is only the native ARM64 entry slice. It does not by itself satisfy
-the required ARM64EC/x64 hybrid path. A later reviewed bridge extension must
-route checked ARM64X metadata and GEM's existing hybrid coordinator without
-making instruction bytes, host `x18`, or Wine callbacks authoritative.
+This profile is the native ARM64 entry slice. For checked ARM64X images the
+bridge attaches the parsed CHPE code map and routes execution through GEM's
+hybrid coordinator while preserving the same memory, context, budget, and
+fault authority.
+
+## ARM64X and embedded x64 integration
+
+Issue #24 extends the accepted Issue #23 native execution path without replacing
+the staged Wine build. Wine registers each mapped ARM64X image with its load
+configuration, code map, redirection metadata, and dispatch helpers. Registration
+is process-wide and may be deferred until mappings are complete; activation is
+atomic so an engine thread never observes a partially published image.
+
+The coordinator classifies targets only from checked ARM64X metadata. ARM64 and
+ARM64EC blocks execute through pinned Dynarmic; x64 blocks execute through the
+pinned embedded Blink interpreter built with `--disable-jit`. Dispatch-call,
+dispatch-jump, dispatch-return, entry/exit thunks, callbacks, tail calls, and
+nested transitions share the broker-owned canonical context and bounded frame
+stack. Wine callback responses restore the transition cookie and original x64
+stack sidecars before execution resumes.
+
+The accepting fixture is the authentic Microsoft-linked ARM64X DLL and x64 host
+produced by the existing source-only fixture pipeline. Its staged-Wine run must
+print `ARM64X linked fixture native execution passed`, exit zero, remain within
+the bounded execution/transition budgets, and load no translated host process.
+This is an x86-64 guest claim. A separate real PE32/i386 run is still required
+before claiming 32-bit x86 support.
 
 ## Boundary callbacks
 
@@ -99,6 +128,20 @@ closed as invariant violations rather than reaching Wine as extensible events.
 Callbacks run while that thread's non-recursive run lock is held. A callback
 must not wait for another operation that requires the same thread to finish.
 Re-entry fails with `GEM_WINE_CONFLICT`.
+
+On native ARM64 Wine, syscall and Unix-call trampolines are guest `svc`
+instructions. `KeUserModeCallback` does not invoke the PE callback dispatcher
+as a Darwin function pointer and does not nest the macOS JIT exception handler.
+It publishes a checked callback PC and stack into the current Wine syscall
+frame; `NtCallbackReturn` restores the saved guest continuation before GEM
+resumes. Callback state is per thread and supports nested Windows callbacks.
+
+The clean integration command validates this contract with one fresh Wine
+prefix. `wineboot --init` is bounded to 1800 seconds and native ARM64
+`cmd.exe /c exit` to 600 seconds. Both runs capture sampled process trees and
+resolved executable paths; any observed Mach-O executable that is not
+ARM64-only fails the build. Logs and process evidence are copied beside the
+stage and SHA-256 bound into the build manifest.
 
 ## Run publication
 

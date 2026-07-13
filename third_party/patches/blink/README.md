@@ -2,12 +2,13 @@
 
 This ISC patch applies only to Blink `f006a4fc6f9b8de9272504fdff0dbbe5ce5dc580` from the
 SHA-256 verified upstream archive. The zero-context patch SHA-256 is
-`03acc9bc848338e7614a1f487054cc6995e5826c94c4ddbf17365d6a7ae1891a`. It adds an opaque
+`36774371e862c7a44775b19d16b130c23ab0beccf223d755b0321225c7fbfd03`. It adds an opaque
 bounded step API around Blink's existing `NewSystem`/`NewMachine`, `LoadInstruction`, decoded `GetOp` handler selection, and
 `ExecuteInstruction`/`JitlessDispatch`. It does not contain a decoder or opcode parser.
 
-The initial handler-function allowlist is source-reviewed and intentionally excludes every x87,
-MMX, SIMD, syscall, string, and atomic handler. Provenance records the exact approved names,
+The handler-function allowlist is source-reviewed and intentionally excludes every x87, MMX,
+syscall, string, and atomic handler plus every SIMD form outside the two scalar-double operations
+required by the authentic fixture. Provenance records the exact approved names,
 defining-file hashes, definition ranges, and definition hashes; the audit rejects additions or
 drift. This is not a semantic claim about any handler outside that manifest. Raw canonical x87/MM
 slots remain an untouched
@@ -26,9 +27,10 @@ architectural state.
 The same decode dispatch exposes a separate, machine-owned "last decode attempt" record that
 captures the exact `Mopcode(rde)`, the `DescribeMopcode()` mnemonic Blink's own
 decoder assigned, and the `GemHandlerId()` allowlist id (or `0` outside the reviewed set).
-Reviewed LEA and relative-CALL handlers carry ids 10 and 11. ID 12 admits only
-the register-register REX.W form of mopcode `0x003` from the shared `OpAluFlip`
-handler; other widths, memory forms, and operations remain rejected.
+Reviewed LEA and relative-CALL handlers carry ids 10 and 11. IDs 12–19 narrowly admit the
+authentic fixture's register ALU forms, near indirect CALL/JMP, scalar-double ADD/SUB,
+32-bit register TEST, memory-source MOVSXD, and multi-byte alignment NOP. Each operand-width and
+addressing restriction is enforced after Blink's own decode; neighboring forms remain rejected.
 The record is reset on every step, populated only after
 a successful `LoadInstruction`, and is diagnostic-only — it never influences execution,
 allowlisting, or committed architectural state.

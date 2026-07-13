@@ -1,9 +1,9 @@
 diff --git a/blink/gem_embed.c b/blink/gem_embed.c
 new file mode 100644
-index 0000000..2708bb1
+index 0000000000000000000000000000000000000000..a189ec0b8241e1a7a5a6ac373257931130a5529c
 --- /dev/null
 +++ b/blink/gem_embed.c
-@@ -0,0 +1,427 @@
+@@ -0,0 +1,434 @@
 +/*
 + * Copyright 2022 Justine Alexandra Roberts Tunney
 + * Copyright 2026 MetalSharp Wine Runtime contributors
@@ -415,6 +415,13 @@ index 0000000..2708bb1
 +    case BLINK_GEM_HANDLER_OP_LEA_GVQP_M: return "OpLeaGvqpM";
 +    case BLINK_GEM_HANDLER_OP_CALL_JVDS: return "OpCallJvds";
 +    case BLINK_GEM_HANDLER_OP_ALU_FLIP: return "OpAluFlip";
++    case BLINK_GEM_HANDLER_OP_CALL_EQ: return "OpCallEq";
++    case BLINK_GEM_HANDLER_OP_JMP_EQ: return "OpJmpEq";
++    case BLINK_GEM_HANDLER_OP_ADD_PSD: return "OpAddpsd";
++    case BLINK_GEM_HANDLER_OP_SUB_PSD: return "OpSubpsd";
++    case BLINK_GEM_HANDLER_OP_ALU_TEST: return "OpAluTest";
++    case BLINK_GEM_HANDLER_OP_MOVSL_GDQP_ED: return "OpMovslGdqpEd";
++    case BLINK_GEM_HANDLER_OP_NOP_EV: return "OpNopEv";
 +    default: return "OpUnknown";
 +  }
 +}
@@ -433,10 +440,10 @@ index 0000000..2708bb1
 +}
 diff --git a/blink/gem_embed.h b/blink/gem_embed.h
 new file mode 100644
-index 0000000..e366d86
+index 0000000000000000000000000000000000000000..af211c039ab55dee67f561bada7a61eed64d2002
 --- /dev/null
 +++ b/blink/gem_embed.h
-@@ -0,0 +1,157 @@
+@@ -0,0 +1,164 @@
 +/*
 + * Copyright 2022 Justine Alexandra Roberts Tunney
 + * Copyright 2026 MetalSharp Wine Runtime contributors
@@ -485,7 +492,14 @@ index 0000000..e366d86
 +  BLINK_GEM_HANDLER_OP_RET = 9,
 +  BLINK_GEM_HANDLER_OP_LEA_GVQP_M = 10,
 +  BLINK_GEM_HANDLER_OP_CALL_JVDS = 11,
-+  BLINK_GEM_HANDLER_OP_ALU_FLIP = 12
++  BLINK_GEM_HANDLER_OP_ALU_FLIP = 12,
++  BLINK_GEM_HANDLER_OP_CALL_EQ = 13,
++  BLINK_GEM_HANDLER_OP_JMP_EQ = 14,
++  BLINK_GEM_HANDLER_OP_ADD_PSD = 15,
++  BLINK_GEM_HANDLER_OP_SUB_PSD = 16,
++  BLINK_GEM_HANDLER_OP_ALU_TEST = 17,
++  BLINK_GEM_HANDLER_OP_MOVSL_GDQP_ED = 18,
++  BLINK_GEM_HANDLER_OP_NOP_EV = 19
 +};
 +struct blink_gem_trace_entry {
 +  uint64_t rip;
@@ -595,10 +609,10 @@ index 0000000..e366d86
 +const char* blink_gem_decode_attempt_name(const struct blink_gem_decode_attempt*);
 +#endif
 diff --git a/blink/machine.c b/blink/machine.c
-index ad309eb..42a6d1b 100644
+index ad309eb2b837423ba31dec2f8db30b94edfa502d..7cc92e0851551b734901cbf98e255470be468ab9 100644
 --- a/blink/machine.c
 +++ b/blink/machine.c
-@@ -2092,0 +2093,24 @@ nexgen32e_f GetOp(long op) {
+@@ -2092,0 +2093,56 @@ nexgen32e_f GetOp(long op) {
 +int GemHandlerId(nexgen32e_f handler, long rde) {
 +  if (handler == OpNop) return 1;
 +  if (handler == OpMovZvqpIvqp) return 2;
@@ -611,11 +625,43 @@ index ad309eb..42a6d1b 100644
 +  if (handler == OpRet) return 9;
 +  if (handler == OpLeaGvqpM) return 10;
 +  if (handler == OpCallJvds) return 11;
-+  /* Narrow the shared ALU handler to the authentic register-register REX.W
-+   * ADD Gvqp,Evqp. Other widths, memory forms, and operations remain rejected. */
-+  if (handler == OpAluFlip && Mopcode(rde) == 0x003 && Rexw(rde) &&
-+      IsModrmRegister(rde))
++  /* Narrow the shared ALU handler to authentic register-register forms: ADD
++   * Gvqp,Evqp at 32/64 bits, OR Gvqp,Evqp at 64 bits, and the fixture's
++   * 32-bit XOR Gvqp,Evqp zeroing idiom. 16-bit, memory, 64-bit XOR, and every
++   * other shared operation remain rejected. */
++  if (handler == OpAluFlip && IsModrmRegister(rde) &&
++      ((Mopcode(rde) == 0x003 && !Osz(rde)) ||
++       (Mopcode(rde) == 0x00b && Rexw(rde)) ||
++       (Mopcode(rde) == 0x033 && !Osz(rde) && !Rexw(rde))))
 +    return 12;
++  /* The 0xff decoder group dispatches near indirect CALL/JMP through
++   * OpCallEq/OpJmpEq. Admit only the long-mode 64-bit forms; far branches,
++   * arithmetic, stack operations, and operand-size overrides remain closed. */
++  if (handler == Op0ff && Mopcode(rde) == 0x0ff && !Osz(rde)) {
++    if (ModrmReg(rde) == 2) return 13;
++    if (ModrmReg(rde) == 4) return 14;
++  }
++  /* Authentic fixture scalar-double arithmetic only. Keep packed-double,
++   * scalar-single, and broader addressing families outside this manifest. */
++  if (handler == OpAddpsd && Mopcode(rde) == 0x158 && Rep(rde) == 2 &&
++      !Osz(rde) && IsModrmRegister(rde))
++    return 15;
++  if (handler == OpSubpsd && Mopcode(rde) == 0x15c && Rep(rde) == 2 &&
++      !Osz(rde) && IsRipRelative(rde))
++    return 16;
++  /* The authentic variadic path tests a 32-bit register against itself and
++   * sign-extends a 32-bit stack argument into a 64-bit register. Admit only
++   * those operand-width/addressing families. */
++  if (handler == OpAluTest && Mopcode(rde) == 0x085 && !Osz(rde) &&
++      !Rexw(rde) && IsModrmRegister(rde))
++    return 17;
++  if (handler == OpMovslGdqpEd && Mopcode(rde) == 0x063 && Rexw(rde) &&
++      !IsModrmRegister(rde))
++    return 18;
++  /* Compiler alignment NOPs use the architecturally inert 0f 1f family,
++   * including redundant operand-size prefixes. */
++  if (handler == OpNopEv && Mopcode(rde) == 0x11f)
++    return 19;
 +  return 0;
 +}
 +
@@ -624,7 +670,7 @@ index ad309eb..42a6d1b 100644
 +}
 +
 diff --git a/blink/machine.h b/blink/machine.h
-index be17a8a..b0507cb 100644
+index be17a8a6e3ee328a1d81fedef7971b788aba419b..b0507cb933c870c894a5399d89b022784d74b470 100644
 --- a/blink/machine.h
 +++ b/blink/machine.h
 @@ -440,0 +441 @@ struct Machine {               //
@@ -633,7 +679,7 @@ index be17a8a..b0507cb 100644
 +bool GemIsAllowedHandler(nexgen32e_f, long);
 +int GemHandlerId(nexgen32e_f, long);
 diff --git a/blink/throw.c b/blink/throw.c
-index a2f8a88..5943ee3 100644
+index a2f8a88e277218964e1d670144d42128e5c9c26a..5943ee37b67a43c4c4208236dc77161dfb471148 100644
 --- a/blink/throw.c
 +++ b/blink/throw.c
 @@ -64,0 +65,6 @@ void HaltMachine(struct Machine *m, int code) {

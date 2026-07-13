@@ -11,6 +11,7 @@
     "homebrew": {
       "formulas": {
         "bison": "3.8.2",
+        "freetype": "2.14.3",
         "mesa": "26.1.4",
         "sdl2-compat": "2.32.70",
         "sdl3": "3.4.12",
@@ -56,6 +57,22 @@
         {
           "path": "third_party/patches/wine/0006-ntdll-integrate-native-darwin-arm64-gem.patch",
           "sha256": "48c120dc1fdf6295a823261f1a13a88f8c2a61c170ad2605f34d402f617d8e18"
+        },
+        {
+          "path": "third_party/patches/wine/0007-ntdll-execute-native-arm64-through-gem.patch",
+          "sha256": "d8c556a4731671a21aedb7e67a3ab7180fb1eb801939c971deafe56f2c788097"
+        },
+        {
+          "path": "third_party/patches/wine/0008-darwin-arm64-add-native-gem-launch-contract.patch",
+          "sha256": "30d32f26812833a48bd868ffce7a0840e1565102be1d5c95ed1621f675268e31"
+        },
+        {
+          "path": "third_party/patches/wine/0009-ntdll-complete-gem-fault-suspend-boundaries.patch",
+          "sha256": "876ce98daf1ce1b7b69764c3a66f014de2b72084b75f56106449d583ed1a3b8f"
+        },
+        {
+          "path": "third_party/patches/wine/0010-ntdll-register-arm64x-images-with-gem.patch",
+          "sha256": "1f691704db9c2b5a987ab503036eb8fa724afb6f4488a66f5393c3842e4e34a5"
         }
       ]
     },
@@ -79,7 +96,7 @@
       "source_archive_sha256": "e0bad68ba2927a1ca1d53537afee1644e11a1e683d26676a36e5b9b17a63d6af",
       "distribution": "optional build-tree-only pinned source/build dependency",
       "adr": "docs/architecture/adr/0008-blink-roundtrip.md",
-      "embedding_patch_sha256": "03acc9bc848338e7614a1f487054cc6995e5826c94c4ddbf17365d6a7ae1891a",
+      "embedding_patch_sha256": "36774371e862c7a44775b19d16b130c23ab0beccf223d755b0321225c7fbfd03",
       "embedding_provenance": "docs/architecture/adr/0008-blink-embedding.provenance.json",
       "accepting_mode": "real interpreter handler allowlist; DISABLE_JIT"
     }

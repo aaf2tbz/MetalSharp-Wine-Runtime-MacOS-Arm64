@@ -26,6 +26,11 @@ extern "C" {
 #define GEM_WINE_THREAD_CONFIG_VERSION UINT32_C(1)
 #define GEM_WINE_BOUNDARY_ABI_VERSION UINT32_C(1)
 #define GEM_WINE_RUN_RESULT_VERSION UINT32_C(1)
+#define GEM_WINE_ARM64X_CONFIG_VERSION UINT32_C(1)
+#define GEM_WINE_NATIVE_UNIX_CALL_SVC UINT32_C(0x5749)
+#define GEM_WINE_ARM64X_FLAG_SVC_BOUNDARIES UINT64_C(0x0000000000000001)
+#define GEM_WINE_ARM64X_FLAG_DEFER_ROUTING UINT64_C(0x0000000000000002)
+#define GEM_WINE_ARM64X_BOUNDARY_SVC UINT32_C(0x474d)
 #define GEM_WINE_GUEST_PAGE_SIZE UINT64_C(4096)
 #define GEM_WINE_KUSER_SHARED_DATA_ADDRESS UINT64_C(0x7ffe0000)
 #define GEM_WINE_KUSER_CANONICAL_ADDRESS UINT64_C(0x1007ffe0000)
@@ -104,6 +109,22 @@ struct gem_wine_process_config {
     uint64_t reserved[4];
 };
 
+/* Exact Wine loader publication for one already-relocated ARM64X image. The
+ * bridge parses the mapped PE metadata itself and copies it before returning;
+ * no instruction scanning or caller-owned metadata survives registration. */
+struct gem_wine_arm64x_config {
+    uint32_t version;
+    uint32_t struct_size;
+    uint64_t loaded_base;
+    uint64_t image_size;
+    uint64_t checker_helper;
+    uint64_t dispatch_call_helper;
+    uint64_t dispatch_jump_helper;
+    uint64_t dispatch_ret_helper;
+    uint64_t flags;
+    uint64_t reserved[3];
+};
+
 /* Bridge-owned copy of engine stop information. Fixed-width fields keep the
  * public dylib ABI independent from the internal engine's enum layout. */
 struct gem_wine_stop_info {
@@ -177,6 +198,8 @@ GEM_WINE_STATIC_ASSERT(sizeof(enum gem_wine_page_protection) == 4U,
 GEM_WINE_STATIC_ASSERT(sizeof(enum gem_wine_run_outcome) == 4U, "gem_wine_run_outcome ABI changed");
 GEM_WINE_STATIC_ASSERT(sizeof(struct gem_wine_process_config) == 80U,
                        "gem_wine_process_config ABI changed");
+GEM_WINE_STATIC_ASSERT(sizeof(struct gem_wine_arm64x_config) == 88U,
+                       "gem_wine_arm64x_config ABI changed");
 GEM_WINE_STATIC_ASSERT(sizeof(struct gem_wine_stop_info) == 40U, "gem_wine_stop_info ABI changed");
 GEM_WINE_STATIC_ASSERT(offsetof(struct gem_wine_stop_info, instructions_retired) == 16U,
                        "gem_wine_stop_info instructions offset changed");
@@ -207,6 +230,14 @@ GEM_WINE_API enum gem_wine_status
 gem_wine_process_create(const struct gem_wine_process_config *config,
                         struct gem_wine_process **out_process);
 GEM_WINE_API enum gem_wine_status gem_wine_process_destroy(struct gem_wine_process *process);
+/* Enable precise hybrid boundary routing before an ARM64EC process executes
+ * its first guest instruction. Idempotent; native ARM64 Wine processes should
+ * leave this disabled so they retain the engine's native fast path. */
+GEM_WINE_API enum gem_wine_status
+gem_wine_process_prepare_arm64ec(struct gem_wine_process *process);
+GEM_WINE_API enum gem_wine_status
+gem_wine_process_register_arm64x_mapped(struct gem_wine_process *process,
+                                        const struct gem_wine_arm64x_config *config);
 GEM_WINE_API enum gem_wine_status gem_wine_process_reserve(struct gem_wine_process *process,
                                                            uint64_t address, uint64_t size);
 GEM_WINE_API enum gem_wine_status gem_wine_process_commit_identity(struct gem_wine_process *process,
@@ -235,6 +266,14 @@ gem_wine_thread_create(struct gem_wine_process *process,
                        const struct gem_wine_thread_config *config,
                        struct gem_wine_thread **out_thread);
 GEM_WINE_API enum gem_wine_status gem_wine_thread_destroy(struct gem_wine_thread *thread);
+GEM_WINE_API enum gem_wine_status
+gem_wine_thread_set_native_upper_simd(struct gem_wine_thread *thread,
+                                      const struct gem_u128 vectors[16]);
+GEM_WINE_API enum gem_wine_status
+gem_wine_thread_get_native_upper_simd(struct gem_wine_thread *thread, struct gem_u128 vectors[16]);
+/* Async-signal-safe for a live thread object: requests a bounded engine stop
+ * without acquiring the bridge, runtime, or guest-memory locks. */
+GEM_WINE_API void gem_wine_thread_request_async_stop(struct gem_wine_thread *thread);
 /* The input is copied before execution. Callback responses are proposals that
  * are validated in full before replacing GEM's canonical context. `out_context`
  * and `result` are published only after the run reaches a bounded stop. */

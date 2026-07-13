@@ -104,7 +104,8 @@ enum gem_stop_reason gem_x64_blink_step(struct gem_x64_runtime *r, const struct 
         export(&bo, out);
         if (br.retired == 1 && blink_gem_machine_decode_attempt_info(r->backend, &attempt) &&
             attempt.valid) {
-            r->last_instruction_was_call = attempt.handler_id == BLINK_GEM_HANDLER_OP_CALL_JVDS;
+            r->last_instruction_was_call = attempt.handler_id == BLINK_GEM_HANDLER_OP_CALL_JVDS ||
+                                           attempt.handler_id == BLINK_GEM_HANDLER_OP_CALL_EQ;
             r->last_instruction_was_ret = attempt.handler_id == BLINK_GEM_HANDLER_OP_RET;
         }
         return br.retired == 1 ? GEM_STOP_NONE : GEM_STOP_INVARIANT_VIOLATION;

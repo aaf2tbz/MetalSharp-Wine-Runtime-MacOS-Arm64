@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 
 PINNED_REVISION = "f006a4fc6f9b8de9272504fdff0dbbe5ce5dc580"
-APPROVED_HANDLERS = (
+UNRESTRICTED_HANDLERS = (
     "OpNop",
     "OpMovZvqpIvqp",
     "OpMovEvqpGvqp",
@@ -19,7 +19,25 @@ APPROVED_HANDLERS = (
     "OpRet",
     "OpLeaGvqpM",
     "OpCallJvds",
+)
+APPROVED_HANDLER_DEFINITIONS = UNRESTRICTED_HANDLERS + (
     "OpAluFlip",
+    "Op0ff",
+    "OpAddpsd",
+    "OpSubpsd",
+    "OpAluTest",
+    "OpMovslGdqpEd",
+    "OpNopEv",
+)
+TRACE_IDENTITIES = UNRESTRICTED_HANDLERS + (
+    "OpAluFlip",
+    "OpCallEq",
+    "OpJmpEq",
+    "OpAddpsd",
+    "OpSubpsd",
+    "OpAluTest",
+    "OpMovslGdqpEd",
+    "OpNopEv",
 )
 
 
@@ -66,11 +84,14 @@ def definition_bytes(path, start_line, end_line, name):
 def audit_handlers(source_root, provenance, machine_text):
     manifest = provenance["handlerManifest"]
     names = tuple(entry["name"] for entry in manifest)
-    need(names == APPROVED_HANDLERS, "handler manifest addition, removal, or ordering drift")
+    need(
+        names == APPROVED_HANDLER_DEFINITIONS,
+        "handler manifest addition, removal, or ordering drift",
+    )
     need(len(names) == len(set(names)), "duplicate handler manifest entry")
 
     compared = tuple(re.findall(r"handler == (Op[A-Za-z0-9_]+)", machine_text))
-    need(compared == APPROVED_HANDLERS, "compiled handler allowlist drift")
+    need(compared == APPROVED_HANDLER_DEFINITIONS, "compiled handler allowlist drift")
 
     for entry in manifest:
         name = entry["name"]
@@ -92,7 +113,8 @@ def audit_handlers(source_root, provenance, machine_text):
 def audit_trace(provenance, machine_text, embedding_text, embedding_header):
     # The decoder-owned handler identity is the single authority for both the
     # allowlist decision and the diagnostic trace id.  GemHandlerId maps the
-    # exact Blink handler pointer to a stable 1..12 id. Shared handlers may be
+    # exact Blink handler pointer to a stable 1..19 id. Shared/group handlers
+    # may be
     # narrowed by Blink's already-decoded mopcode; no byte decoder is added.
     mapped = tuple(
         (name, int(value))
@@ -101,35 +123,43 @@ def audit_trace(provenance, machine_text, embedding_text, embedding_header):
         )
     )
     need(
-        tuple(name for name, _ in mapped) == APPROVED_HANDLERS[:-1],
+        tuple(name for name, _ in mapped) == UNRESTRICTED_HANDLERS,
         "unrestricted GemHandlerId ordering drift",
     )
     need(
-        tuple(value for _, value in mapped) == tuple(range(1, len(APPROVED_HANDLERS))),
+        tuple(value for _, value in mapped) == tuple(range(1, len(UNRESTRICTED_HANDLERS) + 1)),
         "unrestricted GemHandlerId numbering drift",
     )
+    gem_handler_id = re.search(
+        r"int GemHandlerId\(nexgen32e_f handler, long rde\) \{(.*?)\n\}",
+        machine_text,
+        re.S,
+    )
+    need(gem_handler_id is not None, "GemHandlerId definition missing")
+    returned_ids = tuple(
+        int(value)
+        for value in re.findall(r"return (\d+);", gem_handler_id.group(1))
+        if value != "0"
+    )
+    need(returned_ids == tuple(range(1, 20)), "GemHandlerId numbering/coverage drift")
     restricted = provenance["handlerTrace"]["restrictions"]
     need(
         restricted
         == [
             {
-                "name": "OpAluFlip",
-                "mopcode": 3,
-                "rexW": True,
-                "modrmRegister": True,
-                "decodedName": "OpAluwFlip",
-                "reason": "only authentic register-register REX.W ADD Gvqp,Evqp; other widths, memory forms, and shared ALU mappings remain rejected",
-            }
+                "id": 12,
+                "handler": "OpAluFlip",
+                "forms": "ADD r32/r64, OR r64, XOR r32; register-register only",
+            },
+            {"id": 13, "handler": "Op0ff", "forms": "near indirect CALL, 0xff /2"},
+            {"id": 14, "handler": "Op0ff", "forms": "near indirect JMP, 0xff /4"},
+            {"id": 15, "handler": "OpAddpsd", "forms": "ADDSD xmm,xmm"},
+            {"id": 16, "handler": "OpSubpsd", "forms": "SUBSD xmm,[rip+disp32]"},
+            {"id": 17, "handler": "OpAluTest", "forms": "TEST r32,r32"},
+            {"id": 18, "handler": "OpMovslGdqpEd", "forms": "MOVSXD r64,m32"},
+            {"id": 19, "handler": "OpNopEv", "forms": "0x0f 0x1f alignment NOP"},
         ],
         "handler restriction provenance drift",
-    )
-    need(
-        re.search(
-            r"if \(handler == OpAluFlip && Mopcode\(rde\) == 0x003 && Rexw\(rde\) &&\s*"
-            r"IsModrmRegister\(rde\)\)\s*return 12;",
-            machine_text,
-        ),
-        "restricted OpAluFlip allowlist drift",
     )
     need(
         "return GemHandlerId(handler, rde) != 0;" in machine_text,
@@ -159,7 +189,7 @@ def audit_trace(provenance, machine_text, embedding_text, embedding_header):
     need(trace["capacity"] == 256 and trace["abiVersion"] == 1, "trace provenance drift")
     identity = tuple((e["id"], e["name"]) for e in trace["identityMap"])
     need(
-        identity == tuple((i + 1, name) for i, name in enumerate(APPROVED_HANDLERS)),
+        identity == tuple((i + 1, name) for i, name in enumerate(TRACE_IDENTITIES)),
         "trace identity manifest drift",
     )
 

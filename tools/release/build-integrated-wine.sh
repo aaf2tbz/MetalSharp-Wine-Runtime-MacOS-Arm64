@@ -38,7 +38,7 @@ done
     echo "Wine foundation builds require a native macOS ARM64 host" >&2; exit 1;
 }
 
-for tool in git python3 cmake make clang clang++ pkg-config bison flex file otool xcrun; do
+for tool in git python3 cmake make clang clang++ pkg-config bison flex file nm otool xcrun; do
     command -v "$tool" >/dev/null || { echo "missing required host tool: $tool" >&2; exit 1; }
 done
 [[ -d "$llvm_mingw/bin" ]] || { echo "invalid LLVM-MinGW root: $llvm_mingw" >&2; exit 1; }
@@ -61,7 +61,7 @@ if [[ -z "$brew_prefix" ]] && command -v brew >/dev/null; then brew_prefix=$(bre
     echo "Homebrew prefix is required for the pinned native dependency set" >&2; exit 1;
 }
 brew_opt="$brew_prefix/opt"
-for required in bison vulkan-headers vulkan-loader mesa sdl2-compat sdl3; do
+for required in bison freetype vulkan-headers vulkan-loader mesa sdl2-compat sdl3; do
     [[ -d "$brew_opt/$required" ]] || { echo "missing Homebrew dependency: $required" >&2; exit 1; }
     expected=$(python3 - "$lock" "$required" <<'PY'
 import json, sys
@@ -96,11 +96,12 @@ PY
 }
 
 pkg_config_path=()
-for prefix in "$brew_opt/vulkan-headers" "$brew_opt/vulkan-loader" "$brew_opt/mesa" "$brew_opt/sdl2-compat" "$brew_opt/sdl3"; do
+for prefix in "$brew_opt/freetype" "$brew_opt/vulkan-headers" "$brew_opt/vulkan-loader" "$brew_opt/mesa" "$brew_opt/sdl2-compat" "$brew_opt/sdl3"; do
     [[ -d "$prefix/lib/pkgconfig" ]] && pkg_config_path+=("$prefix/lib/pkgconfig")
 done
 export PKG_CONFIG_PATH=$(IFS=:; echo "${pkg_config_path[*]}")
 pkg-config --exists vulkan || { echo "pkg-config cannot resolve Vulkan" >&2; exit 1; }
+pkg-config --exists freetype2 || { echo "pkg-config cannot resolve FreeType" >&2; exit 1; }
 pkg-config --exists egl || { echo "pkg-config cannot resolve EGL" >&2; exit 1; }
 pkg-config --exists sdl2 || { echo "pkg-config cannot resolve SDL2" >&2; exit 1; }
 pkg-config --exists sdl3 || { echo "pkg-config cannot resolve SDL3" >&2; exit 1; }
@@ -141,7 +142,8 @@ gem_prefix="$work/gem-prefix"
 }
 cmake -S "$root" -B "$gem_build" -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$gem_prefix" \
-    -DMSWR_ENABLE_ARM64EC_ENGINE=ON -DMSWR_BUILD_WINE_BRIDGE=ON \
+    -DMSWR_ENABLE_ARM64EC_ENGINE=ON -DMSWR_ENABLE_X64_ENGINE=ON \
+    -DMSWR_BUILD_WINE_BRIDGE=ON \
     -DMSWR_WARNINGS_AS_ERRORS=ON
 cmake --build "$gem_build" --parallel "$jobs" --target metalsharp_gem_wine
 cmake --install "$gem_build" --component metalsharp-gem-wine
@@ -186,8 +188,35 @@ configure=("$source_dir/configure" "--host=aarch64-apple-darwin"
     make install 2>&1 | tee "$work/install.log"
 )
 cmake --install "$gem_build" --prefix "$prefix" --component metalsharp-gem-wine
+runtime_dir="$prefix/lib/wine/aarch64-unix"
+acceptance_exe="$prefix/lib/wine/aarch64-windows/metalsharp-gem-acceptance.exe"
+"$llvm_mingw/bin/aarch64-w64-mingw32-clang" -O2 -Wall -Wextra -Werror \
+    -Wl,--no-insert-timestamp -Wl,--subsystem,console \
+    "$root/tests/fixtures/wine_arm64_gem_acceptance.c" -o "$acceptance_exe"
+file "$acceptance_exe" | grep -Eq 'PE32\+ executable.*Aarch64' || {
+    echo "native ARM64 GEM acceptance executable has the wrong architecture" >&2; exit 1;
+}
+install -m 755 "$deps_root/vulkan/libvulkan.dylib" "$runtime_dir/libvulkan.1.dylib"
+ln -sfn libvulkan.1.dylib "$runtime_dir/libvulkan.dylib"
+install -m 755 "$deps_root/moltenvk/libMoltenVK.dylib" "$runtime_dir/libMoltenVK.dylib"
+install -m 755 "$brew_opt/mesa/lib/libEGL.1.dylib" "$runtime_dir/libEGL.1.dylib"
+ln -sfn libEGL.1.dylib "$runtime_dir/libEGL.dylib"
+install -m 755 "$brew_opt/freetype/lib/libfreetype.6.dylib" "$runtime_dir/libfreetype.6.dylib"
+ln -sfn libfreetype.6.dylib "$runtime_dir/libfreetype.dylib"
+install -m 755 "$brew_opt/sdl2-compat/lib/libSDL2-2.0.0.dylib" \
+    "$runtime_dir/libSDL2-2.0.0.dylib"
+ln -sfn libSDL2-2.0.0.dylib "$runtime_dir/libSDL2-2.0.dylib"
+ln -sfn libSDL2-2.0.0.dylib "$runtime_dir/libSDL2.dylib"
+install -m 755 "$brew_opt/sdl3/lib/libSDL3.0.dylib" "$runtime_dir/libSDL3.0.dylib"
+ln -sfn libSDL3.0.dylib "$runtime_dir/libSDL3.dylib"
 ntdll="$prefix/lib/wine/aarch64-unix/ntdll.so"
 [[ -f "$ntdll" ]] || { echo "staged native ntdll.so is missing" >&2; exit 1; }
+nm -gjU "$ntdll" | grep -Fx '___wine_main_gem' >/dev/null || {
+    echo "ntdll.so lacks the native ARM64 GEM launch ABI" >&2; exit 1;
+}
+nm -gjU "$prefix/bin/wine" | grep -Fx '_wine_main_preload_info' >/dev/null || {
+    echo "installed wrapper lacks the in-process loader marker" >&2; exit 1;
+}
 otool -L "$ntdll" | grep -F '@rpath/libmetalsharp-gem-wine.0.dylib' >/dev/null || {
     echo "ntdll.so lacks the direct versioned GEM dependency" >&2; exit 1;
 }
@@ -225,6 +254,162 @@ if result.returncode or missing:
     raise SystemExit(f"staged GEM lifecycle probe failed: rc={result.returncode}, missing={missing}")
 PY
 
+acceptance_prefix="$work/acceptance-prefix"
+acceptance_dir="$work/acceptance-evidence"
+mkdir -p "$acceptance_dir"
+python3 - "$prefix" "$acceptance_prefix" "$acceptance_dir" <<'PY'
+import ctypes
+import datetime
+import os
+import pathlib
+import signal
+import subprocess
+import sys
+import threading
+import time
+
+prefix, wineprefix, evidence = map(pathlib.Path, sys.argv[1:])
+wineprefix.mkdir()
+env = os.environ.copy()
+env.update({"WINEDEBUG": "+gem,-all", "WINE_GEM_LAUNCH_TRACE": "1",
+            "WINEPREFIX": str(wineprefix)})
+libproc = ctypes.CDLL("/usr/lib/libproc.dylib")
+libproc.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+libproc.proc_pidpath.restype = ctypes.c_int
+descriptions = {}
+audit_failure = []
+
+def executable(pid):
+    buffer = ctypes.create_string_buffer(4096)
+    length = libproc.proc_pidpath(pid, buffer, len(buffer))
+    return pathlib.Path(os.fsdecode(buffer.value)) if length > 0 else None
+
+def process_rows():
+    output = subprocess.check_output(
+        ["ps", "-axo", "pid=,ppid=,state=,etime=,command="], text=True,
+        errors="replace")
+    rows = []
+    for line in output.splitlines():
+        fields = line.strip().split(None, 4)
+        if len(fields) == 5 and fields[0].isdigit() and fields[1].isdigit():
+            rows.append((int(fields[0]), int(fields[1]), fields[2], fields[3], fields[4]))
+    return rows
+
+def sample(stop, root_pid, destination):
+    with destination.open("w", encoding="utf-8") as stream:
+        while not stop.is_set():
+            rows = process_rows()
+            selected = {root_pid}
+            candidates = {
+                pid for pid, _ppid, _state, _elapsed, command in rows
+                if pid == root_pid or command.startswith(str(prefix)) or command.startswith("C:\\")
+            }
+            paths = {pid: executable(pid) for pid in candidates}
+            for pid, path in tuple(paths.items()):
+                if path:
+                    try:
+                        path.relative_to(prefix)
+                    except ValueError:
+                        pass
+                    else:
+                        selected.add(pid)
+            changed = True
+            while changed:
+                changed = False
+                for pid, ppid, _state, _elapsed, _command in rows:
+                    if ppid in selected:
+                        if pid not in selected:
+                            selected.add(pid)
+                            changed = True
+            for pid in selected:
+                paths.setdefault(pid, executable(pid))
+            stamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            for pid, ppid, state, elapsed, command in rows:
+                if pid not in selected:
+                    continue
+                path = paths[pid]
+                description = "unresolved"
+                if path and path.exists():
+                    key = str(path)
+                    if key not in descriptions:
+                        descriptions[key] = subprocess.check_output(
+                            ["file", "-b", key], text=True, errors="replace").strip()
+                    description = descriptions[key]
+                    if "Mach-O" in description and (
+                            "arm64" not in description or "x86_64" in description):
+                        audit_failure.append(f"pid={pid} path={path} file={description}")
+                stream.write(
+                    f"{stamp} pid={pid} ppid={ppid} state={state} elapsed={elapsed} "
+                    f"path={path or 'unresolved'} file={description} command={command}\n")
+            stream.flush()
+            stop.wait(0.25)
+
+def run(name, argv, timeout):
+    log = evidence / f"{name}.log"
+    tree = evidence / f"{name}-process-tree.log"
+    with log.open("w", encoding="utf-8") as output:
+        process = subprocess.Popen(argv, env=env, stdout=output, stderr=subprocess.STDOUT,
+                                   start_new_session=True, text=True)
+        stop = threading.Event()
+        sampler = threading.Thread(target=sample, args=(stop, process.pid, tree), daemon=True)
+        sampler.start()
+        try:
+            returncode = process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGTERM)
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait()
+            raise SystemExit(f"{name} timed out after {timeout} seconds")
+        finally:
+            stop.set()
+            sampler.join(timeout=5)
+    if returncode:
+        raise SystemExit(f"{name} failed with rc={returncode}; see {log}")
+    return log
+
+try:
+    wineboot_log = run("wineboot", [str(prefix / "bin/wineboot"), "--init"], 1800)
+    gem_acceptance_log = run(
+        "gem-acceptance",
+        [str(prefix / "bin/wine"), "metalsharp-gem-acceptance.exe"], 120)
+    cmd_log = run("cmd", [str(prefix / "bin/wine"), "cmd.exe", "/c", "exit"], 600)
+finally:
+    subprocess.run([str(prefix / "bin/wineserver"), "-k"], env=env,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+                   timeout=30)
+
+if audit_failure:
+    raise SystemExit("translated or non-ARM64 process detected:\n" + "\n".join(audit_failure))
+combined = wineboot_log.read_text(encoding="utf-8", errors="replace") + \
+           gem_acceptance_log.read_text(encoding="utf-8", errors="replace") + \
+           cmd_log.read_text(encoding="utf-8", errors="replace")
+resolved_prefix = prefix.resolve(strict=True)
+required = ("gem_signal_run enter pc=", "boundary syscall", "boundary unix-call",
+            "callback enter", "callback return",
+            "metalsharp-gem-acceptance: access-violation=continued",
+            "metalsharp-gem-acceptance: guard=consumed",
+            "metalsharp-gem-acceptance: thread=create,suspend,resume,exit",
+            "metalsharp-gem-acceptance: passed",
+            f"wine: native ARM64 GEM launch image={resolved_prefix}/lib/wine/aarch64-windows/wineboot.exe",
+            f"wine: native ARM64 GEM launch image={resolved_prefix}/lib/wine/aarch64-windows/metalsharp-gem-acceptance.exe",
+            f"wine: native ARM64 GEM launch image={resolved_prefix}/lib/wine/aarch64-windows/cmd.exe")
+missing = [marker for marker in required if marker not in combined]
+forbidden = ("Unhandled EXC_BAD_ACCESS", "GEM execution failed", "boot event wait timed out",
+             "could not load", "status=c0000135", "start.exe",
+             "native ARM64 builtin launch ABI not found", "returned unexpectedly",
+             "GEM thread destroy failed", "Interpret should never be emitted",
+             "assertion failed")
+found = [marker for marker in forbidden if marker in combined]
+if missing or found:
+    raise SystemExit(f"runtime evidence rejected: missing={missing}, forbidden={found}")
+(evidence / "process-executables.txt").write_text(
+    "".join(f"{path}\t{description}\n" for path, description in sorted(descriptions.items())),
+    encoding="utf-8")
+PY
+
 find "$stage" \( -type f -o -type l \) | sort > "$work/install-files.txt"
 find "$stage" -type f -print0 | xargs -0 file > "$work/macho-files.txt"
 while IFS= read -r installed; do
@@ -237,6 +422,7 @@ while IFS= read -r installed; do
 done < <(find "$stage" -type f | sort)
 "$root/tools/ci/audit-zero-rosetta.sh" "$stage" | tee "$work/zero-rosetta-audit.txt"
 cp -R "$prefix" "$output/wine"
+cp -R "$acceptance_dir" "$output/evidence"
 clang --version > "$work/clang-version.txt"
 make --version > "$work/make-version.txt"
 xcrun --show-sdk-version > "$work/sdk-version.txt"
@@ -258,14 +444,27 @@ for path in sorted(p for p in stage.rglob("*") if p.is_file() or p.is_symlink())
     if path.is_symlink(): record["target"] = os.readlink(path)
     else: record.update({"size": path.stat().st_size, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
     files.append(record)
+evidence = pathlib.Path(work) / "acceptance-evidence"
+evidence_files = {}
+for path in sorted(p for p in evidence.rglob("*") if p.is_file()):
+    evidence_files[path.relative_to(evidence).as_posix()] = {
+        "size": path.stat().st_size,
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+    }
 value = {"schema": 1, "kind": "wine-foundation", "repositoryCommit": repository_commit,
          "source": {"repository": wine["repository"], "revision": wine["revision"],
                      "patchedHead": subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()},
          "wine": {"version": wine["version"], "configure": ["--host=aarch64-apple-darwin", "--enable-archs=i386,x86_64,aarch64,arm64ec", "--with-mingw=xllvm-mingw", "--with-x", "--with-opengl", "--with-vulkan", "--with-sdl", "--with-metalsharp-gem=<external-prefix>"]},
          "bridge": {"abi": 1, "dependency": "@rpath/libmetalsharp-gem-wine.0.dylib", "rpath": "@loader_path/../..", "linkage": "direct"},
-         "dependencies": {"llvmMingw": str(llvm), "homebrewPrefix": str(brew), "externalRuntime": str(deps), "bison": "required", "vulkan": "headers+loader+MoltenVK", "opengl": "macOS framework", "egl": "pkg-config/mesa", "sdl2": "required", "sdl3": "recorded; Wine 11.12 consumes SDL2"},
+         "dependencies": {"llvmMingw": str(llvm), "homebrewPrefix": str(brew), "externalRuntime": str(deps), "bison": "required", "freetype": "required+staged", "vulkan": "headers+loader+MoltenVK staged", "opengl": "macOS framework", "egl": "pkg-config/mesa+staged", "sdl2": "required+staged", "sdl3": "staged; Wine 11.12 consumes SDL2"},
          "toolchain": {"host": "aarch64-apple-darwin", "uname": text("uname.txt"), "clang": text("clang-version.txt"), "make": text("make-version.txt"), "sdk": text("sdk-version.txt")},
          "acceptance": {"lifecycleProbe": "passed before guest entry",
+                        "nativeLaunchContract": "version 1; exact staged builtin PE selected in-process",
+                        "winebootInit": "passed with a fresh prefix within 1800 seconds",
+                        "nativeArm64RuntimeProbe": "continued access violation; consumed guard; created, suspended, resumed, and cleanly terminated a guest thread",
+                        "nativeArm64CmdExit": "passed within 600 seconds",
+                        "processAudit": "all observed Mach-O executables are ARM64-only",
+                        "evidence": evidence_files,
                         "lifecycleLog": text("gem-lifecycle-probe.log"),
                         "hostMachOClosure": text("zero-rosetta-audit.txt")},
          "build": {"jobs": int(jobs), "installRoot": "<external-stage>/wine", "files": files, "fileAudit": text("macho-files.txt")}}

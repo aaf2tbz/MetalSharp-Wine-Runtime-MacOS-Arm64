@@ -78,7 +78,10 @@ gem_arm64ec_runtime_create(struct gem_memory *memory,
         runtime->config = *config;
     if (runtime->config.execution_profile < GEM_ARM64EC_PROFILE_STRICT ||
         runtime->config.execution_profile > GEM_ARM64EC_PROFILE_NATIVE_ARM64 ||
-        runtime->config.reserved != 0U) {
+        runtime->config.boundary_delivery < GEM_ARM64EC_BOUNDARY_PRECISE ||
+        runtime->config.boundary_delivery > GEM_ARM64EC_BOUNDARY_SVC_TRAP ||
+        (runtime->config.boundary_delivery == GEM_ARM64EC_BOUNDARY_SVC_TRAP &&
+         runtime->config.execution_profile != GEM_ARM64EC_PROFILE_STRICT)) {
         free(runtime);
         return NULL;
     }
@@ -120,6 +123,17 @@ bool gem_arm64ec_runtime_attach_arm64x(struct gem_arm64ec_runtime *runtime,
     return true;
 }
 
+bool gem_arm64ec_runtime_set_target_resolver(struct gem_arm64ec_runtime *runtime,
+                                             gem_arm64ec_target_resolve_fn resolver, void *opaque) {
+    if (runtime == NULL || runtime->running ||
+        runtime->config.execution_profile != GEM_ARM64EC_PROFILE_STRICT ||
+        (resolver == NULL) != (opaque == NULL))
+        return false;
+    runtime->target_resolver = resolver;
+    runtime->target_resolver_opaque = opaque;
+    return true;
+}
+
 enum gem_stop_reason gem_arm64ec_runtime_run(struct gem_arm64ec_runtime *runtime,
                                              struct gem_thread_context *context, uint64_t budget) {
     enum gem_stop_reason reason;
@@ -158,11 +172,34 @@ enum gem_stop_reason gem_arm64ec_runtime_run(struct gem_arm64ec_runtime *runtime
     return finish_stop(runtime, context, reason);
 }
 
+void gem_arm64ec_runtime_request_async_stop(struct gem_arm64ec_runtime *runtime) {
+    if (runtime != NULL)
+        gem_arm64ec_dynarmic_request_async_stop(runtime);
+}
+
 bool gem_arm64ec_runtime_last_stop_info(const struct gem_arm64ec_runtime *runtime,
                                         struct gem_arm64ec_stop_info *out_info) {
     if (runtime == NULL || out_info == NULL)
         return false;
     *out_info = runtime->last_stop;
+    return true;
+}
+
+bool gem_arm64ec_runtime_set_native_upper_simd(struct gem_arm64ec_runtime *runtime,
+                                               const struct gem_u128 vectors[16]) {
+    if (runtime == NULL || vectors == NULL || runtime->running ||
+        runtime->config.execution_profile != GEM_ARM64EC_PROFILE_NATIVE_ARM64)
+        return false;
+    memcpy(runtime->native_upper_simd, vectors, sizeof(runtime->native_upper_simd));
+    return true;
+}
+
+bool gem_arm64ec_runtime_get_native_upper_simd(const struct gem_arm64ec_runtime *runtime,
+                                               struct gem_u128 vectors[16]) {
+    if (runtime == NULL || vectors == NULL || runtime->running ||
+        runtime->config.execution_profile != GEM_ARM64EC_PROFILE_NATIVE_ARM64)
+        return false;
+    memcpy(vectors, runtime->native_upper_simd, sizeof(runtime->native_upper_simd));
     return true;
 }
 
@@ -172,6 +209,15 @@ bool gem_arm64ec_runtime_set_boundary_broker(struct gem_arm64ec_runtime *runtime
         return false;
     runtime->boundary_broker = broker;
     runtime->boundary_opaque = opaque;
+    return true;
+}
+
+bool gem_arm64ec_runtime_set_boundary_return_pc(struct gem_arm64ec_runtime *runtime,
+                                                uint64_t return_pc) {
+    if (runtime == NULL || runtime->running ||
+        runtime->config.boundary_delivery != GEM_ARM64EC_BOUNDARY_SVC_TRAP)
+        return false;
+    runtime->boundary_return_pc = return_pc;
     return true;
 }
 

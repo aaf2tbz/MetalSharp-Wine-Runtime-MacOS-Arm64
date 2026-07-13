@@ -191,8 +191,9 @@ endif()
 mswr_enable_warnings(metalsharp_gem)
 
 if(MSWR_BUILD_WINE_BRIDGE)
-    if(NOT MSWR_ENABLE_ARM64EC_ENGINE)
-        message(FATAL_ERROR "MSWR_BUILD_WINE_BRIDGE requires MSWR_ENABLE_ARM64EC_ENGINE=ON")
+    if(NOT MSWR_ENABLE_ARM64EC_ENGINE OR NOT MSWR_ENABLE_X64_ENGINE)
+        message(FATAL_ERROR
+            "MSWR_BUILD_WINE_BRIDGE requires both ARM64EC and interpreter-only x64 engines")
     endif()
     set_property(TARGET metalsharp_gem PROPERTY POSITION_INDEPENDENT_CODE ON)
     add_library(metalsharp_gem_wine SHARED src/gem/wine_bridge.c)
@@ -328,6 +329,16 @@ if(BUILD_TESTING)
             "${mswr_roundtrip_dll}" "${mswr_roundtrip_map}" "${mswr_roundtrip_native_oracle}")
         set_tests_properties(gem.arm64x_roundtrip PROPERTIES
             LABELS "zero-rosetta;gem.engine;authentic-arm64x")
+        if(APPLE AND MSWR_BUILD_WINE_BRIDGE)
+            add_executable(wine_arm64x_conformance tests/wine_arm64x_conformance.cpp)
+            target_link_libraries(wine_arm64x_conformance PRIVATE metalsharp_gem_wine metalsharp_gem)
+            target_compile_features(wine_arm64x_conformance PRIVATE cxx_std_17)
+            mswr_enable_warnings(wine_arm64x_conformance)
+            add_test(NAME gem.wine_arm64x_conformance COMMAND wine_arm64x_conformance
+                "${mswr_roundtrip_dll}")
+            set_tests_properties(gem.wine_arm64x_conformance PROPERTIES
+                LABELS "zero-rosetta;wine-bridge;authentic-arm64x")
+        endif()
     endif()
 
     if(MSWR_ZERO_ROSETTA_AUDIT)
@@ -354,6 +365,28 @@ if(BUILD_TESTING)
         target_link_libraries(${test_name} PRIVATE metalsharp_gem pe_arm64x_fixture)
         mswr_enable_warnings(${test_name})
         add_test(NAME gem.${test_name} COMMAND ${test_name})
+    endforeach()
+
+    # Conformance checks intentionally use assert() as their executable oracle.
+    # Keep that oracle active in optimized configurations so Release builds do
+    # not compile away both validation and the values consumed only by it.
+    set(mswr_assert_test_targets
+        context_test context_layout_test gem_headers_cxx_test
+        context_conversion_test context_serialization_test memory_test
+        memory_page_isolation_test macos_tso_api_probe
+        arm64ec_engine_conformance wine_bridge_conformance x64_engine_conformance
+        arm64x_roundtrip_conformance wine_arm64x_conformance
+        arm64ec_engine_zero_rosetta arm64ec_target_test
+        pe_arm64x_test pe_arm64x_malformed_test pe_arm64x_fuzz_test
+        pe_arm64x_loader_test)
+    foreach(test_target IN LISTS mswr_assert_test_targets)
+        if(TARGET ${test_target})
+            if(MSVC)
+                target_compile_options(${test_target} PRIVATE $<$<CONFIG:Release>:/UNDEBUG>)
+            else()
+                target_compile_options(${test_target} PRIVATE $<$<CONFIG:Release>:-UNDEBUG>)
+            endif()
+        endif()
     endforeach()
 endif()
 

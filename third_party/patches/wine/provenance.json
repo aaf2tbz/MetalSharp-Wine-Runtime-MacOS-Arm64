@@ -48,6 +48,34 @@
       "sha256": "48c120dc1fdf6295a823261f1a13a88f8c2a61c170ad2605f34d402f617d8e18",
       "authoringCommit": "4e324aef626e3845a4e3e8d67df5cbe65d47e9aa",
       "purpose": "Require and directly link the exact native GEM bridge ABI, then synchronize Wine ntdll process, thread, memory, KUSER, protection, invalidation, and teardown lifecycle."
+    },
+    {
+      "order": 7,
+      "path": "third_party/patches/wine/0007-ntdll-execute-native-arm64-through-gem.patch",
+      "sha256": "d8c556a4731671a21aedb7e67a3ab7180fb1eb801939c971deafe56f2c788097",
+      "authoringCommit": "953373784b3a6ec550d368ebcdde5326ac02a6be",
+      "purpose": "Replace Darwin ARM64 native guest entry with bounded GEM execution and explicit syscall, Unix-call, fault, exception, suspend, and termination boundaries."
+    },
+    {
+      "order": 8,
+      "path": "third_party/patches/wine/0008-darwin-arm64-add-native-gem-launch-contract.patch",
+      "sha256": "30d32f26812833a48bd868ffce7a0840e1565102be1d5c95ed1621f675268e31",
+      "authoringCommit": "71897e20586f69ae8951bfcdb608d4193b34a393",
+      "purpose": "Launch staged Darwin ARM64 builtins through a versioned in-process GEM contract, restore x18 at Wine syscall return, and make immediate process-exit teardown safe."
+    },
+    {
+      "order": 9,
+      "path": "third_party/patches/wine/0009-ntdll-complete-gem-fault-suspend-boundaries.patch",
+      "sha256": "876ce98daf1ce1b7b69764c3a66f014de2b72084b75f56106449d583ed1a3b8f",
+      "authoringCommit": "29a7e2aa64cbf5570e64fdf487f073e97d1e1060",
+      "purpose": "Synchronize post-fault protections per committed 4 KiB guest page and route native GEM thread suspension through a lock-free cooperative engine boundary."
+    },
+    {
+      "order": 10,
+      "path": "third_party/patches/wine/0010-ntdll-register-arm64x-images-with-gem.patch",
+      "sha256": "1f691704db9c2b5a987ab503036eb8fa724afb6f4488a66f5393c3842e4e34a5",
+      "authoringCommit": "bc43cd00ae0f63c9f3cc6f6f087e6cc3ec8621fe",
+      "purpose": "Register validated mapped ARM64X images process-wide, route metadata redirections and helper SVC boundaries through GEM, and preserve Wine syscall, callback, suspension, and return contracts."
     }
   ],
   "researchEvidence": {
@@ -66,12 +94,13 @@
       "debuggerLocation": "dlls/ntdll/unix/loader.c: reexec_loader -> execv"
     },
     "patchedOutcome": {
-      "status": "expected-later-failure",
-      "returnCode": 1,
-      "retainedLogBytes": 19358,
-      "lastMilestone": "PE ntdll and API-set mapped",
-      "firstFailure": "virtual_setup_exception stack overflow before the Wine-to-GEM guest-entry handoff"
+      "status": "incremental-runtime-pass",
+      "winebootReturnCode": 0,
+      "cmdReturnCode": 0,
+      "winebootElapsedSeconds": 85.44,
+      "cmdElapsedSeconds": 66.18,
+      "lastMilestone": "fresh-prefix wineboot --init and cmd.exe /c exit completed through GEM"
     },
-    "acceptance": "research-only; clean release build and runtime gates remain required"
+    "acceptance": "incremental evidence only; the clean build entrypoint owns the release gate"
   }
 }

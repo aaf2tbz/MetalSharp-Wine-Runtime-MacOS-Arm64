@@ -2,6 +2,7 @@
 #ifndef METALSHARP_GEM_ARM64EC_ENGINE_H
 #define METALSHARP_GEM_ARM64EC_ENGINE_H
 
+#include "metalsharp/gem/arm64ec_target.h"
 #include "metalsharp/gem/context.h"
 #include "metalsharp/gem/memory.h"
 
@@ -39,6 +40,12 @@ typedef enum gem_arm64ec_boundary_action (*gem_arm64ec_boundary_fn)(
     void *opaque, uint64_t pc, struct gem_thread_context *context,
     enum gem_arm64ec_boundary_kind *out_kind);
 
+/* Optional process-wide target router. Wine uses this to classify transfers
+ * across independently registered ARM64X images while the engine retains one
+ * canonical context and one checked memory space. */
+typedef enum gem_arm64ec_target_status (*gem_arm64ec_target_resolve_fn)(
+    void *opaque, uint64_t requested_va, struct gem_arm64ec_target_result *out_result);
+
 enum gem_arm64ec_memory_access {
     GEM_ARM64EC_ACCESS_NONE = 0,
     GEM_ARM64EC_ACCESS_FETCH = 1,
@@ -56,13 +63,25 @@ enum gem_arm64ec_execution_profile {
     GEM_ARM64EC_PROFILE_NATIVE_ARM64 = 1,
 };
 
+enum gem_arm64ec_boundary_delivery {
+    /* Inspect every instruction boundary. This remains the default for
+     * callers that provide ordinary helper functions. */
+    GEM_ARM64EC_BOUNDARY_PRECISE = 0,
+    /* Wine-published helper addresses contain GEM_ARM64EC_BOUNDARY_SVC. The
+     * engine may run translated blocks and invokes the broker only when that
+     * architecturally executed trap (or a checked target-map edge) halts it. */
+    GEM_ARM64EC_BOUNDARY_SVC_TRAP = 1,
+};
+
+#define GEM_ARM64EC_BOUNDARY_SVC UINT32_C(0x474d)
+
 struct gem_arm64ec_runtime_config {
     uint64_t host_return_sentinel;
     uint64_t arch_transition_sentinel;
     uint64_t max_budget;
     uint64_t max_transitions;
     enum gem_arm64ec_execution_profile execution_profile;
-    uint32_t reserved;
+    enum gem_arm64ec_boundary_delivery boundary_delivery;
 };
 
 struct gem_arm64ec_stop_info {
@@ -79,6 +98,8 @@ static_assert(sizeof(enum gem_arm64ec_memory_access) == sizeof(int),
               "gem_arm64ec_memory_access ABI changed");
 static_assert(sizeof(enum gem_arm64ec_execution_profile) == sizeof(int),
               "gem_arm64ec_execution_profile ABI changed");
+static_assert(sizeof(enum gem_arm64ec_boundary_delivery) == sizeof(int),
+              "gem_arm64ec_boundary_delivery ABI changed");
 static_assert(sizeof(struct gem_arm64ec_runtime_config) == 40U,
               "gem_arm64ec_runtime_config ABI changed");
 static_assert(sizeof(struct gem_arm64ec_stop_info) == 40U, "gem_arm64ec_stop_info ABI changed");
@@ -87,6 +108,8 @@ _Static_assert(sizeof(enum gem_arm64ec_memory_access) == sizeof(int),
                "gem_arm64ec_memory_access ABI changed");
 _Static_assert(sizeof(enum gem_arm64ec_execution_profile) == sizeof(int),
                "gem_arm64ec_execution_profile ABI changed");
+_Static_assert(sizeof(enum gem_arm64ec_boundary_delivery) == sizeof(int),
+               "gem_arm64ec_boundary_delivery ABI changed");
 _Static_assert(sizeof(struct gem_arm64ec_runtime_config) == 40U,
                "gem_arm64ec_runtime_config ABI changed");
 _Static_assert(sizeof(struct gem_arm64ec_stop_info) == 40U, "gem_arm64ec_stop_info ABI changed");
@@ -103,15 +126,35 @@ void gem_arm64ec_runtime_destroy(struct gem_arm64ec_runtime *runtime);
 bool gem_arm64ec_runtime_attach_arm64x(struct gem_arm64ec_runtime *runtime,
                                        const struct gem_pe_arm64x_image *image,
                                        uint64_t loaded_image_base);
+bool gem_arm64ec_runtime_set_target_resolver(struct gem_arm64ec_runtime *runtime,
+                                             gem_arm64ec_target_resolve_fn resolver, void *opaque);
 
 enum gem_stop_reason gem_arm64ec_runtime_run(struct gem_arm64ec_runtime *runtime,
                                              struct gem_thread_context *context, uint64_t budget);
 
+/* Requests a bounded GEM_STOP_ASYNC_REQUEST from another thread or a signal
+ * handler.  The request does not acquire GEM memory or runtime locks. */
+void gem_arm64ec_runtime_request_async_stop(struct gem_arm64ec_runtime *runtime);
+
 bool gem_arm64ec_runtime_last_stop_info(const struct gem_arm64ec_runtime *runtime,
                                         struct gem_arm64ec_stop_info *out_info);
 
+/* Native Windows ARM64 has 32 architectural SIMD registers while the fixed
+ * ARM64EC context ABI carries v0-v15.  The native profile keeps v16-v31 in a
+ * runtime-owned sidecar so bounded stops and Wine callbacks do not lose
+ * state without changing the 720-byte public context. */
+bool gem_arm64ec_runtime_set_native_upper_simd(struct gem_arm64ec_runtime *runtime,
+                                               const struct gem_u128 vectors[16]);
+bool gem_arm64ec_runtime_get_native_upper_simd(const struct gem_arm64ec_runtime *runtime,
+                                               struct gem_u128 vectors[16]);
+
 bool gem_arm64ec_runtime_set_boundary_broker(struct gem_arm64ec_runtime *runtime,
                                              gem_arm64ec_boundary_fn broker, void *opaque);
+/* Sets an additional dynamic fetch boundary used by SVC-trap delivery for the
+ * current coordinator segment. Zero clears it. Thread-confined and rejected
+ * while the runtime is executing. */
+bool gem_arm64ec_runtime_set_boundary_return_pc(struct gem_arm64ec_runtime *runtime,
+                                                uint64_t return_pc);
 uint64_t gem_arm64ec_runtime_transition_count(const struct gem_arm64ec_runtime *runtime);
 
 void gem_arm64ec_runtime_invalidate_code(struct gem_arm64ec_runtime *runtime, uint64_t address,

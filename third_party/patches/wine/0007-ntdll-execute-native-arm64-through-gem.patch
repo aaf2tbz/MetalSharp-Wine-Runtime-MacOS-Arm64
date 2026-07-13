@@ -1,0 +1,702 @@
+From 953373784b3a6ec550d368ebcdde5326ac02a6be Mon Sep 17 00:00:00 2001
+From: Avery Felts <averyfelts@users.noreply.github.com>
+Date: Sun, 12 Jul 2026 13:20:51 -0600
+Subject: [PATCH 7/7] ntdll: execute native ARM64 threads through GEM
+
+---
+ dlls/ntdll/ntdll.spec          |   2 +
+ dlls/ntdll/signal_arm64.c      |  11 +
+ dlls/ntdll/unix/env.c          |   6 +
+ dlls/ntdll/unix/gem.c          |   6 +
+ dlls/ntdll/unix/loader.c       |  19 +-
+ dlls/ntdll/unix/signal_arm64.c | 386 ++++++++++++++++++++++++++++++++-
+ dlls/ntdll/unix/virtual.c      |  47 +++-
+ 7 files changed, 472 insertions(+), 5 deletions(-)
+
+diff --git a/dlls/ntdll/ntdll.spec b/dlls/ntdll/ntdll.spec
+index 0b6d9b2..4cec6ec 100644
+--- a/dlls/ntdll/ntdll.spec
++++ b/dlls/ntdll/ntdll.spec
+@@ -1767,6 +1767,8 @@
+ @ extern -private __wine_syscall_dispatcher
+ @ extern -private __wine_unix_call_dispatcher
+ @ extern -private -arch=arm64ec __wine_unix_call_dispatcher_arm64ec
++@ cdecl -private -arch=arm64 __wine_gem_syscall_dispatcher()
++@ cdecl -private -arch=arm64 __wine_gem_unix_call_dispatcher()
+ @ extern -private __wine_unixlib_handle
+ 
+ # Debugging
+diff --git a/dlls/ntdll/signal_arm64.c b/dlls/ntdll/signal_arm64.c
+index 056f875..72cc50e 100644
+--- a/dlls/ntdll/signal_arm64.c
++++ b/dlls/ntdll/signal_arm64.c
+@@ -843,6 +843,17 @@ void WINAPI LdrInitializeThunk( CONTEXT *context, ULONG_PTR unk2, ULONG_PTR unk3
+     NtContinue( context, TRUE );
+ }
+ 
++/* Guest-resident GEM boundaries.  The Unix loader installs these addresses in
++ * the exported dispatcher slots on macOS so no PE stub can branch into a host
++ * Mach-O text address. */
++__ASM_GLOBAL_FUNC( __wine_gem_syscall_dispatcher,
++                   "svc #0\n\t"
++                   "ret" )
++
++__ASM_GLOBAL_FUNC( __wine_gem_unix_call_dispatcher,
++                   "svc #0x5749\n\t"
++                   "ret" )
++
+ 
+ /***********************************************************************
+  *           process_breakpoint
+diff --git a/dlls/ntdll/unix/env.c b/dlls/ntdll/unix/env.c
+index 460888b..bdd3e51 100644
+--- a/dlls/ntdll/unix/env.c
++++ b/dlls/ntdll/unix/env.c
+@@ -1600,7 +1600,13 @@ static void run_wineboot( WCHAR *env, SIZE_T size )
+     handles[count++] = process;
+ 
+ wait:
++#ifdef __APPLE__
++    /* Checked GEM execution is intentionally unoptimized and may require more
++     * than Wine's native five-minute bootstrap window on Apple Silicon. */
++    timeout.QuadPart = (ULONGLONG)20 * 60 * 1000 * -10000;
++#else
+     timeout.QuadPart = (ULONGLONG)5 * 60 * 1000 * -10000;
++#endif
+     if (NtWaitForMultipleObjects( count, handles, WaitAny, FALSE, &timeout ) == WAIT_TIMEOUT)
+         ERR( "boot event wait timed out\n" );
+     while (count) NtClose( handles[--count] );
+diff --git a/dlls/ntdll/unix/gem.c b/dlls/ntdll/unix/gem.c
+index ae9f336..abf82d9 100644
+--- a/dlls/ntdll/unix/gem.c
++++ b/dlls/ntdll/unix/gem.c
+@@ -37,6 +37,10 @@ WINE_DEFAULT_DEBUG_CHANNEL(gem);
+ 
+ static struct gem_wine_process *gem_process;
+ 
++extern enum gem_wine_status gem_signal_boundary(
++    void *opaque, const struct gem_wine_boundary_request *request,
++    struct gem_wine_boundary_response *response);
++
+ static NTSTATUS gem_status(enum gem_wine_status status)
+ {
+     switch (status)
+@@ -99,6 +103,8 @@ NTSTATUS gem_thread_init(struct thread_data *data)
+     config.version = GEM_WINE_THREAD_CONFIG_VERSION;
+     config.struct_size = sizeof(config);
+     config.teb = (uint64_t)(uintptr_t)data->teb;
++    config.boundary = gem_signal_boundary;
++    config.opaque = data;
+     status = gem_wine_thread_create(gem_process, &config, &data->gem_thread);
+     if (status == GEM_WINE_OK) TRACE("thread created teb=%p\n", data->teb);
+     return gem_status(status);
+diff --git a/dlls/ntdll/unix/loader.c b/dlls/ntdll/unix/loader.c
+index 9a2a6db..02225e4 100644
+--- a/dlls/ntdll/unix/loader.c
++++ b/dlls/ntdll/unix/loader.c
+@@ -1555,6 +1555,10 @@ static void load_ntdll_functions( HMODULE module )
+     void **p__wine_syscall_dispatcher;
+     void **p__wine_unix_call_dispatcher;
+     void **p__wine_unix_call_dispatcher_arm64ec = NULL;
++#ifdef __APPLE__
++    void *p__wine_gem_syscall_dispatcher = NULL;
++    void *p__wine_gem_unix_call_dispatcher = NULL;
++#endif
+     unixlib_handle_t *p__wine_unixlib_handle;
+     const IMAGE_EXPORT_DIRECTORY *exports;
+ 
+@@ -1577,12 +1581,20 @@ static void load_ntdll_functions( HMODULE module )
+     GET_FUNC( __wine_syscall_dispatcher );
+     GET_FUNC( __wine_unix_call_dispatcher );
+     GET_FUNC( __wine_unixlib_handle );
++#ifdef __APPLE__
++    GET_FUNC( __wine_gem_syscall_dispatcher );
++    GET_FUNC( __wine_gem_unix_call_dispatcher );
++#endif
+     if (is_arm64ec())
+     {
+         GET_FUNC( __wine_unix_call_dispatcher_arm64ec );
+         GET_FUNC( KiUserEmulationDispatcher );
+     }
++#ifdef __APPLE__
++    *p__wine_syscall_dispatcher = p__wine_gem_syscall_dispatcher;
++#else
+     *p__wine_syscall_dispatcher = __wine_syscall_dispatcher;
++#endif
+     *p__wine_unixlib_handle = (UINT_PTR)unix_call_funcs;
+     if (p__wine_unix_call_dispatcher_arm64ec)
+     {
+@@ -1590,7 +1602,12 @@ static void load_ntdll_functions( HMODULE module )
+         *p__wine_unix_call_dispatcher = *p__wine_unix_call_dispatcher_arm64ec;
+         *p__wine_unix_call_dispatcher_arm64ec = __wine_unix_call_dispatcher;
+     }
+-    else *p__wine_unix_call_dispatcher = __wine_unix_call_dispatcher;
++    else
++#ifdef __APPLE__
++        *p__wine_unix_call_dispatcher = p__wine_gem_unix_call_dispatcher;
++#else
++        *p__wine_unix_call_dispatcher = __wine_unix_call_dispatcher;
++#endif
+ #undef GET_FUNC
+ }
+ 
+diff --git a/dlls/ntdll/unix/signal_arm64.c b/dlls/ntdll/unix/signal_arm64.c
+index 522ade3..8594b94 100644
+--- a/dlls/ntdll/unix/signal_arm64.c
++++ b/dlls/ntdll/unix/signal_arm64.c
+@@ -59,7 +59,17 @@
+ #include "unix_private.h"
+ #include "wine/debug.h"
+ 
++#if defined(__APPLE__)
++struct gem_callback_state;
++
++#include <metalsharp/gem/wine_bridge.h>
++#include "wine/unixlib.h"
++#endif
++
+ WINE_DEFAULT_DEBUG_CHANNEL(seh);
++#if defined(__APPLE__)
++WINE_DECLARE_DEBUG_CHANNEL(gem);
++#endif
+ 
+ #define NTDLL_DWARF_H_NO_UNWINDER
+ #include "dwarf.h"
+@@ -67,6 +77,13 @@ WINE_DEFAULT_DEBUG_CHANNEL(seh);
+ struct arm64_thread_data
+ {
+     BOOL suspend_pending;
++#if defined(__APPLE__)
++    BOOL gem_context_pending;
++    BOOL gem_logged_syscall;
++    BOOL gem_logged_unix_call;
++    BOOL gem_logged_callback;
++    struct gem_callback_state *gem_callback;
++#endif
+ };
+ 
+ C_ASSERT( sizeof(struct arm64_thread_data) <= sizeof(((struct teb_data *)0)->cpu_data) );
+@@ -197,6 +214,282 @@ struct syscall_frame
+ 
+ C_ASSERT( sizeof( struct syscall_frame ) == 0x330 );
+ 
++#if defined(__APPLE__)
++struct gem_callback_state
++{
++    struct gem_callback_state *previous;
++    void **ret_ptr;
++    ULONG *ret_len;
++    struct syscall_frame frame;
++};
++
++static void syscall_frame_fixup_for_fastpath( struct syscall_frame *frame );
++void DECLSPEC_NORETURN gem_signal_run(void);
++
++static void gem_context_from_frame( struct gem_thread_context *context,
++                                    const struct syscall_frame *frame, TEB *teb )
++{
++    unsigned int i;
++
++    memset( context, 0, sizeof(*context) );
++    context->layout_version = GEM_CONTEXT_LAYOUT_VERSION;
++    context->context_size = GEM_THREAD_CONTEXT_EXPECTED_SIZE;
++    for (i = 0; i < 29; ++i) context->x[i] = frame->x[i];
++    context->x[29] = frame->fp;
++    context->x[30] = frame->lr;
++    context->sp = frame->sp;
++    context->pc = frame->pc;
++    context->nzcv = frame->cpsr & 0xf0000000u;
++    context->fpcr = frame->fpcr;
++    context->fpsr = frame->fpsr;
++    memcpy( context->v, frame->v, sizeof(context->v) );
++    context->teb = (uint64_t)(uintptr_t)teb;
++    context->x[18] = context->teb;
++    context->isa = GEM_ISA_ARM64EC;
++}
++
++static BOOL gem_context_to_frame( struct syscall_frame *frame,
++                                  const struct gem_thread_context *context, TEB *teb )
++{
++    unsigned int i;
++
++    if (!context || context->layout_version != GEM_CONTEXT_LAYOUT_VERSION ||
++        context->context_size != GEM_THREAD_CONTEXT_EXPECTED_SIZE ||
++        context->teb != (uint64_t)(uintptr_t)teb || context->x[18] != context->teb ||
++        context->isa != GEM_ISA_ARM64EC || context->reserved0) return FALSE;
++    for (i = 0; i < 29; ++i) frame->x[i] = context->x[i];
++    frame->fp = context->x[29];
++    frame->lr = context->x[30];
++    frame->sp = context->sp;
++    frame->pc = context->pc;
++    frame->cpsr = context->nzcv & 0xf0000000u;
++    frame->fpcr = context->fpcr;
++    frame->fpsr = context->fpsr;
++    memcpy( frame->v, context->v, sizeof(context->v) );
++    frame->restore_flags = CONTEXT_FULL;
++    syscall_frame_fixup_for_fastpath( frame );
++    return TRUE;
++}
++
++static NTSTATUS gem_call_syscall( const struct gem_thread_context *context )
++{
++    typedef ULONG_PTR (*syscall_func)(ULONG_PTR, ULONG_PTR, ULONG_PTR, ULONG_PTR,
++                                     ULONG_PTR, ULONG_PTR, ULONG_PTR, ULONG_PTR,
++                                     ULONG_PTR, ULONG_PTR, ULONG_PTR, ULONG_PTR,
++                                     ULONG_PTR, ULONG_PTR, ULONG_PTR, ULONG_PTR);
++    SYSTEM_SERVICE_TABLE *table;
++    const ULONG id = context->x[8];
++    const ULONG table_id = (id >> 12) & 3;
++    const ULONG service_id = id & 0xfff;
++    const ULONG_PTR *stack = (const ULONG_PTR *)(uintptr_t)context->sp;
++    ULONG_PTR args[8] = {0};
++    ULONG stack_bytes;
++    syscall_func func;
++
++    table = &KeServiceDescriptorTable[table_id];
++    if (service_id >= table->ServiceLimit) return STATUS_INVALID_SYSTEM_SERVICE;
++    stack_bytes = table->ArgumentTable[service_id];
++    stack_bytes = stack_bytes > 8 * sizeof(ULONG_PTR) ? stack_bytes - 8 * sizeof(ULONG_PTR) : 0;
++    if (stack_bytes > sizeof(args)) return STATUS_INVALID_PARAMETER;
++    if (stack_bytes) memcpy( args, stack, stack_bytes );
++    func = (syscall_func)(uintptr_t)table->ServiceTable[service_id];
++    return func( context->x[0], context->x[1], context->x[2], context->x[3],
++                 context->x[4], context->x[5], context->x[6], context->x[7],
++                 args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7] );
++}
++
++static void gem_frame_set_upper_simd( struct thread_data *data, struct syscall_frame *frame )
++{
++    struct gem_u128 upper[16];
++    enum gem_wine_status status = gem_wine_thread_get_native_upper_simd( data->gem_thread, upper );
++    if (status != GEM_WINE_OK) abort_thread( status );
++    memcpy( frame->v + 16, upper, sizeof(upper) );
++}
++
++static void gem_frame_get_upper_simd( struct thread_data *data, const struct syscall_frame *frame )
++{
++    struct gem_u128 upper[16];
++    enum gem_wine_status status;
++    memcpy( upper, frame->v + 16, sizeof(upper) );
++    status = gem_wine_thread_set_native_upper_simd( data->gem_thread, upper );
++    if (status != GEM_WINE_OK) abort_thread( status );
++}
++
++void DECLSPEC_NORETURN gem_user_mode_callback_enter( ULONG64 user_sp, void *func, TEB *teb )
++{
++    struct thread_data *data = get_thread_data();
++    struct syscall_frame *frame = get_syscall_frame( data );
++    struct syscall_frame *prev_frame = frame->prev_frame;
++    void *syscall_cfa = frame->syscall_cfa;
++
++    memset( frame, 0, sizeof(*frame) );
++    frame->prev_frame = prev_frame;
++    frame->syscall_cfa = syscall_cfa;
++    frame->sp = user_sp;
++    frame->pc = (ULONG64)func;
++    frame->x[18] = (ULONG64)teb;
++    frame->restore_flags = CONTEXT_FULL;
++    syscall_frame_fixup_for_fastpath( frame );
++    gem_signal_run();
++}
++
++enum gem_wine_status gem_signal_boundary(
++    void *opaque, const struct gem_wine_boundary_request *request,
++    struct gem_wine_boundary_response *response )
++{
++    struct thread_data *data = opaque;
++    struct syscall_frame *frame;
++    EXCEPTION_RECORD rec = {0};
++    NTSTATUS status = STATUS_SUCCESS;
++
++    if (!data || data != get_thread_data() || !data->gem_thread || !request || !response)
++        return GEM_WINE_CALLBACK_ERROR;
++    frame = get_syscall_frame( data );
++    if (!frame || !gem_context_to_frame( frame, &request->context, data->teb ))
++        return GEM_WINE_CALLBACK_ERROR;
++    gem_frame_set_upper_simd( data, frame );
++    response->action = GEM_WINE_BOUNDARY_RESUME;
++
++    switch (request->event)
++    {
++    case GEM_WINE_EVENT_SYSCALL:
++    {
++        struct arm64_thread_data *arm64_data = arm64_thread_data( data );
++        const ULONG64 boundary_pc = frame->pc;
++        status = gem_call_syscall( &request->context );
++        if (!arm64_data->gem_logged_syscall)
++        {
++            TRACE_(gem)("boundary syscall id=%#llx status=%#x pc=%p\n",
++                        (unsigned long long)request->context.x[8], (unsigned int)status,
++                        (void *)(uintptr_t)request->context.pc );
++            arm64_data->gem_logged_syscall = TRUE;
++        }
++        if (frame->pc == boundary_pc)
++        {
++            frame->x[0] = status;
++            frame->pc = frame->lr;
++            frame->lr = frame->x[9];
++        }
++        break;
++    }
++    case GEM_WINE_EVENT_UNIX_CALL:
++    {
++        struct arm64_thread_data *arm64_data = arm64_thread_data( data );
++        const unixlib_entry_t *table = (const unixlib_entry_t *)(uintptr_t)frame->x[0];
++        frame->x[0] = table[frame->x[1]]( (void *)(uintptr_t)frame->x[2] );
++        frame->pc = frame->lr;
++        if (!arm64_data->gem_logged_unix_call)
++        {
++            TRACE_(gem)("boundary unix-call index=%llu status=%#llx\n",
++                        (unsigned long long)frame->x[1], (unsigned long long)frame->x[0] );
++            arm64_data->gem_logged_unix_call = TRUE;
++        }
++        break;
++    }
++    case GEM_WINE_EVENT_MEMORY_FAULT:
++        rec.ExceptionAddress = (void *)(uintptr_t)request->context.pc;
++        rec.NumberParameters = 2;
++        rec.ExceptionInformation[0] = request->stop.access == GEM_WINE_ACCESS_WRITE
++                                      ? EXCEPTION_WRITE_FAULT
++                                      : request->stop.access == GEM_WINE_ACCESS_FETCH
++                                        ? EXCEPTION_EXECUTE_FAULT : EXCEPTION_READ_FAULT;
++        rec.ExceptionInformation[1] = request->stop.fault_address;
++        TRACE_(gem)("boundary memory-fault access=%u address=%p pc=%p\n",
++                    request->stop.access, (void *)(uintptr_t)request->stop.fault_address,
++                    (void *)(uintptr_t)request->context.pc );
++        status = virtual_handle_fault( data, &rec, (void *)(uintptr_t)request->context.sp );
++        if (status && status != STATUS_SUCCESS)
++        {
++            CONTEXT context = { CONTEXT_FULL };
++            NtGetContextThread( GetCurrentThread(), &context );
++            context.Pc = request->context.pc;
++            status = call_user_exception_dispatcher( data, &rec, &context );
++            if (status) return GEM_WINE_CALLBACK_ERROR;
++        }
++        break;
++    case GEM_WINE_EVENT_WINDOWS_EXCEPTION:
++    {
++        CONTEXT context = { CONTEXT_FULL };
++        rec.ExceptionAddress = (void *)(uintptr_t)request->context.pc;
++        rec.ExceptionCode = EXCEPTION_BREAKPOINT;
++        TRACE_(gem)("boundary windows-exception pc=%p\n",
++                    (void *)(uintptr_t)request->context.pc );
++        rec.NumberParameters = 1;
++        NtGetContextThread( GetCurrentThread(), &context );
++        context.Pc = request->context.pc + 4;
++        status = call_user_exception_dispatcher( data, &rec, &context );
++        if (status) return GEM_WINE_CALLBACK_ERROR;
++        break;
++    }
++    case GEM_WINE_EVENT_ASYNC_REQUEST:
++        break;
++    default:
++        response->action = GEM_WINE_BOUNDARY_FAIL;
++        return GEM_WINE_OK;
++    }
++    gem_frame_get_upper_simd( data, frame );
++    gem_context_from_frame( &response->context, frame, data->teb );
++    return GEM_WINE_OK;
++}
++
++void DECLSPEC_NORETURN gem_signal_run(void)
++{
++    struct thread_data *data = get_thread_data();
++    struct arm64_thread_data *arm64_data = arm64_thread_data( data );
++    CHPE_V2_CPU_AREA_INFO *cpu_area = data->teb->ChpeV2CpuAreaInfo;
++    struct syscall_frame *frame = get_syscall_frame( data );
++    struct gem_thread_context context, output;
++    struct gem_wine_run_result result;
++    enum gem_wine_status status;
++
++    gem_context_from_frame( &context, frame, data->teb );
++    gem_frame_get_upper_simd( data, frame );
++    TRACE_(gem)("enter pc=%p sp=%p teb=%p\n", (void *)(uintptr_t)context.pc,
++                (void *)(uintptr_t)context.sp, data->teb );
++    for (;;)
++    {
++        if (cpu_area) cpu_area->InSimulation = TRUE;
++        status = gem_wine_thread_run( data->gem_thread, &context, &output, &result );
++        if (cpu_area) cpu_area->InSimulation = FALSE;
++        TRACE_(gem)("stop status=%s reason=%u event=%u retired=%llu callbacks=%llu pc=%p\n",
++                    gem_wine_status_name(status), result.stop_reason, result.last_event,
++                    (unsigned long long)result.instructions_retired,
++                    (unsigned long long)result.boundary_callbacks,
++                    (void *)(uintptr_t)output.pc );
++        context = output;
++        if (status == GEM_WINE_BUDGET_EXPIRED)
++        {
++            CONTEXT wine_context = { CONTEXT_FULL };
++            context.stop_reason = GEM_STOP_NONE;
++            if (arm64_data->gem_context_pending)
++            {
++                arm64_data->gem_context_pending = FALSE;
++                gem_context_from_frame( &context, frame, data->teb );
++                gem_frame_get_upper_simd( data, frame );
++            }
++            else
++            {
++                if (!gem_context_to_frame( frame, &context, data->teb )) abort_thread(1);
++                gem_frame_set_upper_simd( data, frame );
++            }
++            if (arm64_data->suspend_pending)
++            {
++                NtGetContextThread( GetCurrentThread(), &wine_context );
++                if (signal_set_full_context( &wine_context )) abort_thread(1);
++            }
++            gem_context_from_frame( &context, frame, data->teb );
++            gem_frame_get_upper_simd( data, frame );
++            continue;
++        }
++        if (status == GEM_WINE_TERMINATED) abort_thread( result.exit_status );
++        ERR_(gem)("GEM execution failed closed: %s outcome=%u reason=%u event=%u pc=%p\n",
++                  gem_wine_status_name(status), result.outcome, result.stop_reason,
++                  result.last_event, (void *)(uintptr_t)output.pc );
++        abort_thread(1);
++    }
++}
++#endif
++
+ 
+ #define ESR_ELx_EC(esr)                 (((DWORD64)(esr) >> 26) & 0x3f)
+ #define ESR_ELx_EC_IABT_LOW             0x20
+@@ -897,9 +1190,16 @@ __ASM_GLOBAL_FUNC( call_user_mode_callback,
+                    "stp x7, x8, [x1, #0x110]\n\t" /* frame->prev_frame,syscall_cfa */
+                    "ldr w11, [x18, #0x380]\n\t"   /* thread_data->syscall_trace */
+                    "cbnz x11, 1f\n\t"
++#if defined(__APPLE__)
++                   "mov sp, x1\n\t"              /* kernel stack */
++                   "mov x2, x18\n\t"             /* teb */
++                   "mov x1, x3\n\t"              /* func */
++                   "bl " __ASM_NAME("gem_user_mode_callback_enter") "\n"
++#else
+                    /* switch to user stack */
+                    "mov sp, x0\n\t"               /* user_sp */
+                    "br x3\n"
++#endif
+                    "1:\tmov x19, x18\n\t"         /* teb */
+                    "mov x20, x0\n\t"              /* user_sp */
+                    "mov x21, x3\n\t"              /* func */
+@@ -909,8 +1209,16 @@ __ASM_GLOBAL_FUNC( call_user_mode_callback,
+                    "str x0, [x29, #0xc0]\n\t"     /* id */
+                    "bl " __ASM_NAME("trace_usercall") "\n\t"
+                    "mov x18, x19\n\t"             /* teb */
++#if defined(__APPLE__)
++                   "mov x0, x20\n\t"              /* user_sp */
++                   "mov x1, x21\n\t"              /* func */
++                   "mov x2, x19\n\t"              /* teb */
++                   "bl " __ASM_NAME("gem_user_mode_callback_enter") "\n"
++#else
+                    "mov sp, x20\n\t"              /* user_sp */
+-                   "br x21" )
++                   "br x21"
++#endif
++                   )
+ 
+ 
+ /***********************************************************************
+@@ -1019,7 +1327,33 @@ NTSTATUS KeUserModeCallback( ULONG id, const void *args, ULONG len, void **ret_p
+     stack->sp   = frame->sp;
+     stack->pc   = frame->pc;
+     memcpy( stack->args_data, args, len );
++#if defined(__APPLE__)
++    {
++        struct arm64_thread_data *arm64_data = arm64_thread_data( data );
++        struct gem_callback_state *callback = malloc( sizeof(*callback) );
++        if (!callback) return STATUS_NO_MEMORY;
++        callback->previous = arm64_data->gem_callback;
++        callback->ret_ptr = ret_ptr;
++        callback->ret_len = ret_len;
++        callback->frame = *frame;
++        arm64_data->gem_callback = callback;
++        if (!arm64_data->gem_logged_callback)
++        {
++            TRACE_(gem)("callback enter id=%u pc=%p return=%p sp=%p\n", id,
++                        pKiUserCallbackDispatcher, (void *)(uintptr_t)callback->frame.pc,
++                        (void *)(uintptr_t)sp );
++            arm64_data->gem_logged_callback = TRUE;
++        }
++        frame->sp = sp;
++        frame->pc = (ULONG64)pKiUserCallbackDispatcher;
++        frame->x[18] = (ULONG64)data->teb;
++        frame->restore_flags |= CONTEXT_FULL;
++        syscall_frame_fixup_for_fastpath( frame );
++        return STATUS_SUCCESS;
++    }
++#else
+     return call_user_mode_callback( sp, ret_ptr, ret_len, pKiUserCallbackDispatcher, data->teb );
++#endif
+ }
+ 
+ 
+@@ -1031,6 +1365,27 @@ NTSTATUS WINAPI NtCallbackReturn( void *ret_ptr, ULONG ret_len, NTSTATUS status
+     struct thread_data *data = get_thread_data();
+     struct syscall_frame *frame = get_syscall_frame( data );
+ 
++#if defined(__APPLE__)
++    {
++        struct arm64_thread_data *arm64_data = arm64_thread_data( data );
++        struct gem_callback_state *callback = arm64_data->gem_callback;
++        if (callback)
++        {
++            *callback->ret_ptr = ret_ptr;
++            *callback->ret_len = ret_len;
++            *frame = callback->frame;
++            frame->x[0] = status;
++            frame->x[18] = (ULONG64)data->teb;
++            frame->restore_flags |= CONTEXT_FULL;
++            syscall_frame_fixup_for_fastpath( frame );
++            arm64_data->gem_callback = callback->previous;
++            TRACE_(gem)("callback return status=%#x pc=%p sp=%p\n", (unsigned int)status,
++                        (void *)(uintptr_t)frame->pc, (void *)(uintptr_t)frame->sp );
++            free( callback );
++            return status;
++        }
++    }
++#endif
+     if (!frame->prev_frame) return STATUS_NO_CALLBACK_ACTIVE;
+     user_mode_callback_return( ret_ptr, ret_len, status, data->teb );
+ }
+@@ -1416,6 +1771,14 @@ static void usr2_handler( int signal, siginfo_t *siginfo, void *_sigcontext )
+     struct syscall_frame *frame = get_syscall_frame( data );
+     DWORD i;
+ 
++#if defined(__APPLE__)
++    if (data->teb && data->teb->ChpeV2CpuAreaInfo &&
++        data->teb->ChpeV2CpuAreaInfo->InSimulation)
++    {
++        arm64_thread_data( data )->gem_context_pending = TRUE;
++        return;
++    }
++#endif
+     if (!is_inside_syscall( data, SP_sig(sigcontext) )) return;
+     if (!frame) return;
+ 
+@@ -1467,6 +1830,16 @@ NTSTATUS signal_alloc_thread( TEB *teb )
+  */
+ void signal_free_thread( TEB *teb )
+ {
++#if defined(__APPLE__)
++    struct thread_data *data = get_thread_data();
++    struct gem_callback_state *callback;
++    if (data->teb != teb) return;
++    while ((callback = arm64_thread_data( data )->gem_callback))
++    {
++        arm64_thread_data( data )->gem_callback = callback->previous;
++        free( callback );
++    }
++#endif
+ }
+ 
+ 
+@@ -1588,6 +1961,14 @@ void init_syscall_frame( LPTHREAD_START_ROUTINE entry, void *arg, TEB *teb )
+ /***********************************************************************
+  *           signal_start_thread
+  */
++#ifdef __APPLE__
++#define SIGNAL_START_THREAD_TAIL \
++                   "bl " __ASM_NAME("gem_signal_run") "\n\t" \
++                   "brk #0xf003"
++#else
++#define SIGNAL_START_THREAD_TAIL \
++                   "b " __ASM_LOCAL_LABEL("__wine_syscall_dispatcher_return")
++#endif
+ __ASM_GLOBAL_FUNC( signal_start_thread,
+                    "stp x29, x30, [sp,#-0xc0]!\n\t"
+                    __ASM_CFI(".cfi_def_cfa_offset 0xc0\n\t")
+@@ -1621,7 +2002,8 @@ __ASM_GLOBAL_FUNC( signal_start_thread,
+                    /* switch to kernel stack */
+                    "mov sp, x4\n\t"
+                    "bl " __ASM_NAME("init_syscall_frame") "\n\t"
+-                   "b " __ASM_LOCAL_LABEL("__wine_syscall_dispatcher_return") )
++                   SIGNAL_START_THREAD_TAIL )
++#undef SIGNAL_START_THREAD_TAIL
+ 
+ 
+ /***********************************************************************
+diff --git a/dlls/ntdll/unix/virtual.c b/dlls/ntdll/unix/virtual.c
+index e3d5d8c..b688af3 100644
+--- a/dlls/ntdll/unix/virtual.c
++++ b/dlls/ntdll/unix/virtual.c
+@@ -2014,6 +2014,7 @@ static int mprotect_range( void *base, size_t size, BYTE set, BYTE clear )
+  */
+ static BOOL set_vprot( struct file_view *view, void *base, size_t size, BYTE vprot )
+ {
++    const BOOL was_committed = !!(get_page_vprot( base ) & VPROT_COMMITTED);
+     NTSTATUS status;
+     if (!use_kernel_writewatch && view->protect & VPROT_WRITEWATCH)
+     {
+@@ -2026,8 +2027,23 @@ static BOOL set_vprot( struct file_view *view, void *base, size_t size, BYTE vpr
+         else if (use_kernel_writewatch && view->protect & VPROT_WRITEWATCH) vprot &= ~VPROT_WRITEWATCH;
+         set_page_vprot( base, size, vprot );
+     }
++#ifdef __APPLE__
++    /* GEM owns guest access checks.  Keep identity backing read/write at the
++     * native page granularity so checked guest writes and host callbacks see
++     * one coherent mapping even when 4 KiB guest protections share a 16 KiB
++     * macOS page. */
++    {
++        void *host_base = ROUND_ADDR( base, host_page_mask );
++        size_t host_size = ROUND_SIZE( host_base, (char *)base + size - (char *)host_base,
++                                      host_page_mask );
++        if (mprotect( host_base, host_size, PROT_READ | PROT_WRITE )) return FALSE;
++    }
++#else
+     if (mprotect_range( base, size, 0, 0 )) return FALSE;
+-    if (vprot & VPROT_COMMITTED)
++#endif
++    if ((vprot & VPROT_COMMITTED) && was_committed)
++        status = gem_virtual_protect( base, size, get_win32_prot( vprot, view->protect ), NULL );
++    else if (vprot & VPROT_COMMITTED)
+         status = gem_virtual_commit( base, size, get_win32_prot( vprot, view->protect ) );
+     else status = gem_virtual_decommit( base, size );
+     if (status)
+@@ -2058,7 +2074,15 @@ static NTSTATUS set_protection( struct file_view *view, void *base, SIZE_T size,
+     else
+     {
+         BYTE access = vprot & (VPROT_READ | VPROT_WRITE | VPROT_EXEC);
+-        if ((view->protect & access) != access) return STATUS_INVALID_PAGE_PROTECTION;
++        if ((view->protect & access) != access)
++        {
++#ifdef __APPLE__
++            /* The PE loader temporarily writes image IAT pages through the
++             * broad host identity mapping; mirror that permission in GEM. */
++            if (!(view->protect & SEC_IMAGE) || !(access & VPROT_WRITE))
++#endif
++                return STATUS_INVALID_PAGE_PROTECTION;
++        }
+     }
+ 
+     if (!set_vprot( view, base, size, vprot | VPROT_COMMITTED )) return STATUS_ACCESS_DENIED;
+@@ -4717,6 +4741,9 @@ NTSTATUS virtual_handle_fault( struct thread_data *data, EXCEPTION_RECORD *rec,
+     void *addr = (void *)rec->ExceptionInformation[1];
+     char *page = ROUND_ADDR( addr, host_page_mask );
+     BYTE vprot;
++#ifdef __APPLE__
++    struct file_view *view;
++#endif
+ 
+     mutex_lock( &virtual_mutex );  /* no need for signal masking inside signal handler */
+     vprot = get_host_page_vprot( page );
+@@ -4764,6 +4791,22 @@ NTSTATUS virtual_handle_fault( struct thread_data *data, EXCEPTION_RECORD *rec,
+                 ret = STATUS_SUCCESS;
+         }
+     }
++#ifdef __APPLE__
++    if (vprot != get_host_page_vprot( page ) &&
++        (view = find_view_range( page, host_page_size )))
++    {
++        NTSTATUS gem_status = gem_virtual_protect(
++            page, host_page_size,
++            get_win32_prot( get_host_page_vprot( page ), view->protect ), NULL );
++        if (gem_status)
++        {
++            ERR( "GEM fault-protection synchronization failed for %p: %08x\n", page,
++                 gem_status );
++            mutex_unlock( &virtual_mutex );
++            exit(1);
++        }
++    }
++#endif
+     mutex_unlock( &virtual_mutex );
+     rec->ExceptionCode = ret;
+     return ret;

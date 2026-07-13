@@ -91,7 +91,7 @@ int main() {
     assert(r);
     assert(
         strstr(gem_x64_runtime_engine_provenance(r),
-               "patch-sha256=03acc9bc848338e7614a1f487054cc6995e5826c94c4ddbf17365d6a7ae1891a") !=
+               "patch-sha256=36774371e862c7a44775b19d16b130c23ab0beccf223d755b0321225c7fbfd03") !=
         nullptr);
     gem_thread_context c{};
     init(c);
@@ -438,23 +438,122 @@ int main() {
         assert(attempt.valid && attempt.handler_id == BLINK_GEM_HANDLER_OP_ALU_FLIP &&
                !strcmp(attempt.name, "OpAluwFlip") && attempt.rip == CODE);
 
-        /* OpAluFlip is shared by unrelated ALU opcodes. The allowlist admits
-         * only decoder mopcode 0x003 used by the authentic ADD; OR remains
-         * fail-closed despite resolving to the same Blink handler pointer. */
+        /* The authentic x64 fixture also uses ADD EAX,ECX. The 32-bit form
+         * shares the same reviewed handler and must zero-extend its result. */
+        gem_x64_runtime_handler_trace_reset(r);
+        const uint8_t add_eax_ecx[] = {0x03, 0xc1};
+        assert(gem_memory_write(m, CODE, add_eax_ecx, sizeof(add_eax_ecx)) == GEM_MEMORY_OK);
+        init(c);
+        c.x[8] = UINT64_C(0xffffffff00000007);
+        c.x[0] = 5U;
+        const auto add32_before = c;
+        assert(gem_x64_runtime_run(r, &c, 1) == GEM_STOP_BUDGET_EXPIRED);
+        assert(c.pc == CODE + sizeof(add_eax_ecx) && c.x[8] == 12U && c.x[0] == 5U);
+        assert(!memcmp(c.x87, add32_before.x87, sizeof(c.x87)));
+        assert(gem_x64_runtime_decode_attempt_info(r, &attempt));
+        assert(attempt.valid && attempt.handler_id == BLINK_GEM_HANDLER_OP_ALU_FLIP &&
+               !strcmp(attempt.name, "OpAluwFlip") && attempt.rip == CODE);
+
+        /* The authentic aggregate path combines two halves with OR RAX,RCX.
+         * It shares OpAluFlip but has its own exact 64-bit register rule. */
         gem_x64_runtime_handler_trace_reset(r);
         const uint8_t or_rax_rcx[] = {0x48, 0x0b, 0xc1};
         assert(gem_memory_write(m, CODE, or_rax_rcx, sizeof(or_rax_rcx)) == GEM_MEMORY_OK);
         init(c);
+        c.x[8] = UINT64_C(0x1234000000000000);
+        c.x[0] = UINT64_C(0x0000000056789abc);
         const auto or_before = c;
-        assert(gem_x64_runtime_run(r, &c, 1) == GEM_STOP_UNSUPPORTED_INSTRUCTION);
-        assert(c.pc == or_before.pc && !memcmp(c.x87, or_before.x87, sizeof(c.x87)));
+        assert(gem_x64_runtime_run(r, &c, 1) == GEM_STOP_BUDGET_EXPIRED);
+        assert(c.pc == CODE + sizeof(or_rax_rcx) && c.x[8] == UINT64_C(0x1234000056789abc) &&
+               !memcmp(c.x87, or_before.x87, sizeof(c.x87)));
         assert(gem_x64_runtime_decode_attempt_info(r, &attempt));
-        assert(attempt.valid && attempt.mopcode == 0x00bU && attempt.handler_id == 0U &&
+        assert(attempt.valid && attempt.mopcode == 0x00bU &&
+               attempt.handler_id == BLINK_GEM_HANDLER_OP_ALU_FLIP &&
                !strcmp(attempt.name, "OpAluwFlip") && attempt.rip == CODE);
 
-        /* Width and ModR/M form are also part of the narrow admission rule. */
+        /* The authentic variadic fixture zeros EAX with XOR EAX,EAX. Keep
+         * that exact 32-bit register family and its required zero-extension. */
+        const uint8_t xor_eax_eax[] = {0x33, 0xc0};
+        assert(gem_memory_write(m, CODE, xor_eax_eax, sizeof(xor_eax_eax)) == GEM_MEMORY_OK);
+        init(c);
+        c.x[8] = UINT64_C(0xffffffffffffffff);
+        const auto xor32_before = c;
+        assert(gem_x64_runtime_run(r, &c, 1) == GEM_STOP_BUDGET_EXPIRED);
+        assert(c.pc == CODE + sizeof(xor_eax_eax) && c.x[8] == 0U &&
+               !memcmp(c.x87, xor32_before.x87, sizeof(c.x87)));
+        assert(gem_x64_runtime_decode_attempt_info(r, &attempt));
+        assert(attempt.valid && attempt.mopcode == 0x033U &&
+               attempt.handler_id == BLINK_GEM_HANDLER_OP_ALU_FLIP &&
+               !strcmp(attempt.name, "OpAluwFlip"));
+
+        /* The 64-bit XOR variant still resolves to the shared handler but is
+         * outside the reviewed fixture form. */
+        const uint8_t xor_rax_rcx[] = {0x48, 0x33, 0xc1};
+        assert(gem_memory_write(m, CODE, xor_rax_rcx, sizeof(xor_rax_rcx)) == GEM_MEMORY_OK);
+        init(c);
+        assert(gem_x64_runtime_run(r, &c, 1) == GEM_STOP_UNSUPPORTED_INSTRUCTION);
+        assert(gem_x64_runtime_decode_attempt_info(r, &attempt));
+        assert(attempt.valid && attempt.mopcode == 0x033U && attempt.handler_id == 0U &&
+               !strcmp(attempt.name, "OpAluwFlip"));
+
+        /* The authentic variadic path uses TEST ECX,ECX for its zero-count
+         * branch. The 32-bit register form must preserve GPRs and set ZF. */
+        const uint8_t test_ecx_ecx[] = {0x85, 0xc9};
+        assert(gem_memory_write(m, CODE, test_ecx_ecx, sizeof(test_ecx_ecx)) == GEM_MEMORY_OK);
+        init(c);
+        c.x[0] = 0U;
+        const auto test_before = c;
+        assert(gem_x64_runtime_run(r, &c, 1) == GEM_STOP_BUDGET_EXPIRED);
+        assert(c.pc == CODE + sizeof(test_ecx_ecx) && c.x[0] == 0U &&
+               (c.x64_rflags & UINT64_C(0x40)) != 0U &&
+               !memcmp(c.x87, test_before.x87, sizeof(c.x87)));
+        assert(gem_x64_runtime_decode_attempt_info(r, &attempt));
+        assert(attempt.valid && attempt.mopcode == 0x085U &&
+               attempt.handler_id == BLINK_GEM_HANDLER_OP_ALU_TEST &&
+               !strcmp(attempt.name, "OpAluwTest"));
+
+        /* MOVSXD RAX,dword ptr [RBX+8] models the fixture's signed variadic
+         * load while exercising the reviewed memory form. */
+        const int32_t signed_value = -7;
+        assert(gem_memory_write(m, DATA + 8U, &signed_value, sizeof(signed_value)) ==
+               GEM_MEMORY_OK);
+        const uint8_t movsxd_rax_rbx[] = {0x48, 0x63, 0x43, 0x08};
+        assert(gem_memory_write(m, CODE, movsxd_rax_rbx, sizeof(movsxd_rax_rbx)) == GEM_MEMORY_OK);
+        init(c);
+        c.x[27] = DATA;
+        const auto movsxd_before = c;
+        assert(gem_x64_runtime_run(r, &c, 1) == GEM_STOP_BUDGET_EXPIRED);
+        assert(c.pc == CODE + sizeof(movsxd_rax_rbx) && c.x[8] == UINT64_C(0xfffffffffffffff9) &&
+               !memcmp(c.x87, movsxd_before.x87, sizeof(c.x87)));
+        assert(gem_x64_runtime_decode_attempt_info(r, &attempt));
+        assert(attempt.valid && attempt.mopcode == 0x063U &&
+               attempt.handler_id == BLINK_GEM_HANDLER_OP_MOVSL_GDQP_ED &&
+               !strcmp(attempt.name, "OpMovsxdGdqpEd"));
+
+        /* Preserve compiler alignment NOPs exactly, including the redundant
+         * operand-size prefixes emitted by the authentic fixture. */
+        const uint8_t nop_ev[] = {0x66, 0x66, 0x66, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00};
+        assert(gem_memory_write(m, CODE, nop_ev, sizeof(nop_ev)) == GEM_MEMORY_OK);
+        init(c);
+        const auto nop_ev_before = c;
+        assert(gem_x64_runtime_run(r, &c, 1) == GEM_STOP_BUDGET_EXPIRED);
+        assert(c.pc == CODE + sizeof(nop_ev));
+        assert(!memcmp(c.x, nop_ev_before.x, sizeof(c.x)));
+        assert(c.sp == nop_ev_before.sp);
+        assert((c.x64_rflags & UINT64_C(0x8d5)) == (nop_ev_before.x64_rflags & UINT64_C(0x8d5)));
+        assert(c.x64_mxcsr == nop_ev_before.x64_mxcsr);
+        assert(c.x64_fcw == nop_ev_before.x64_fcw);
+        assert(c.x64_fsw == nop_ev_before.x64_fsw);
+        assert(!memcmp(c.v, nop_ev_before.v, sizeof(c.v)));
+        assert(!memcmp(c.x87, nop_ev_before.x87, sizeof(c.x87)));
+        assert(gem_x64_runtime_decode_attempt_info(r, &attempt));
+        assert(attempt.valid && attempt.mopcode == 0x11fU &&
+               attempt.handler_id == BLINK_GEM_HANDLER_OP_NOP_EV &&
+               !strcmp(attempt.name, "OpNopEv"));
+
+        /* 16-bit width and memory ModR/M remain outside the narrow rule. */
         const std::array<std::array<uint8_t, 3>, 2> rejected_adds = {
-            {{0x03, 0xc1, 0x90}, {0x48, 0x03, 0x01}}};
+            {{0x66, 0x03, 0xc1}, {0x48, 0x03, 0x01}}};
         for (const auto &rejected_add : rejected_adds) {
             gem_x64_runtime_handler_trace_reset(r);
             assert(gem_memory_write(m, CODE, rejected_add.data(), rejected_add.size()) ==
@@ -467,6 +566,50 @@ int main() {
             assert(gem_x64_runtime_decode_attempt_info(r, &attempt));
             assert(attempt.valid && attempt.mopcode == 0x003U && attempt.handler_id == 0U &&
                    !strcmp(attempt.name, "OpAluwFlip") && attempt.rip == CODE);
+        }
+
+        /* Authentic scalar-double arithmetic keeps XMM0's upper lane and all
+         * unrelated SIMD/x87 state intact. */
+        gem_x64_runtime_handler_trace_reset(r);
+        const uint8_t addsd_xmm0_xmm0[] = {0xf2, 0x0f, 0x58, 0xc0};
+        assert(gem_memory_write(m, CODE, addsd_xmm0_xmm0, sizeof(addsd_xmm0_xmm0)) ==
+               GEM_MEMORY_OK);
+        init(c);
+        c.v[0].lo = UINT64_C(0x3ff8000000000000); /* 1.5 */
+        const auto addsd_before = c;
+        assert(gem_x64_runtime_run(r, &c, 1) == GEM_STOP_BUDGET_EXPIRED);
+        assert(c.pc == CODE + sizeof(addsd_xmm0_xmm0) &&
+               c.v[0].lo == UINT64_C(0x4008000000000000) && /* 3.0 */
+               c.v[0].hi == addsd_before.v[0].hi && c.x64_mxcsr == addsd_before.x64_mxcsr &&
+               !memcmp(c.x87, addsd_before.x87, sizeof(c.x87)));
+        assert(gem_x64_runtime_decode_attempt_info(r, &attempt));
+        assert(attempt.valid && attempt.handler_id == BLINK_GEM_HANDLER_OP_ADD_PSD &&
+               !strcmp(attempt.name, "OpAddpsd") && attempt.rip == CODE);
+
+        gem_x64_runtime_handler_trace_reset(r);
+        const uint8_t subsd_xmm0_rip[] = {0xf2, 0x0f, 0x5c, 0x05, 0xf8, 0xff, 0x00, 0x00};
+        const uint64_t half = UINT64_C(0x3fe0000000000000); /* 0.5 */
+        assert(gem_memory_write(m, CODE, subsd_xmm0_rip, sizeof(subsd_xmm0_rip)) == GEM_MEMORY_OK &&
+               gem_memory_write(m, DATA, &half, sizeof(half)) == GEM_MEMORY_OK);
+        init(c);
+        c.v[0].lo = UINT64_C(0x4008000000000000); /* 3.0 */
+        const auto subsd_before = c;
+        assert(gem_x64_runtime_run(r, &c, 1) == GEM_STOP_BUDGET_EXPIRED);
+        assert(c.pc == CODE + sizeof(subsd_xmm0_rip) &&
+               c.v[0].lo == UINT64_C(0x4004000000000000) && /* 2.5 */
+               c.v[0].hi == subsd_before.v[0].hi && c.x64_mxcsr == subsd_before.x64_mxcsr &&
+               !memcmp(c.x87, subsd_before.x87, sizeof(c.x87)));
+        assert(gem_x64_runtime_decode_attempt_info(r, &attempt));
+        assert(attempt.valid && attempt.handler_id == BLINK_GEM_HANDLER_OP_SUB_PSD &&
+               !strcmp(attempt.name, "OpSubpsd") && attempt.rip == CODE);
+
+        for (const std::array<uint8_t, 4> rejected_sse :
+             {std::array<uint8_t, 4>{0x66, 0x0f, 0x58, 0xc0},
+              std::array<uint8_t, 4>{0xf3, 0x0f, 0x58, 0xc0}}) {
+            assert(gem_memory_write(m, CODE, rejected_sse.data(), rejected_sse.size()) ==
+                   GEM_MEMORY_OK);
+            init(c);
+            assert(gem_x64_runtime_run(r, &c, 1) == GEM_STOP_UNSUPPORTED_INSTRUCTION);
         }
 
         /* Reviewed relative CALL transactionally pushes its return address and
@@ -487,7 +630,56 @@ int main() {
         assert(attempt.valid && attempt.handler_id == BLINK_GEM_HANDLER_OP_CALL_JVDS &&
                !strcmp(attempt.name, "OpCallJvds") && attempt.rip == CODE);
 
+        /* Windows ARM64X import thunks use RIP-relative FF /2 and FF /4.
+         * Admission is based on Blink's decoded 0x0ff group and ModR/M
+         * selector; GEM does not scan or reinterpret instruction bytes. */
+        constexpr uint64_t indirect_slot = CODE + 0x100U;
+        constexpr uint64_t indirect_target = CODE + 0x200U;
+        const uint8_t indirect_call[] = {0xff, 0x15, 0xfa, 0x00, 0x00, 0x00};
+        assert(gem_memory_write(m, CODE, indirect_call, sizeof(indirect_call)) == GEM_MEMORY_OK);
+        assert(gem_memory_write(m, indirect_slot, &indirect_target, sizeof(indirect_target)) ==
+               GEM_MEMORY_OK);
+        gem_x64_runtime_handler_trace_reset(r);
+        init(c);
+        const auto indirect_call_sp = c.sp;
+        assert(gem_x64_runtime_run(r, &c, 1) == GEM_STOP_BUDGET_EXPIRED);
+        assert(c.pc == indirect_target && c.sp == indirect_call_sp - sizeof(uint64_t) &&
+               gem_x64_runtime_last_instruction_was_call(r));
+        call_return = 0U;
+        assert(gem_memory_read(m, c.sp, &call_return, sizeof(call_return)) == GEM_MEMORY_OK);
+        assert(call_return == CODE + sizeof(indirect_call));
+        assert(gem_x64_runtime_decode_attempt_info(r, &attempt));
+        assert(attempt.valid && attempt.mopcode == 0x0ffU &&
+               attempt.handler_id == BLINK_GEM_HANDLER_OP_CALL_EQ &&
+               !strcmp(attempt.name, "Op0ff") && attempt.rip == CODE);
+
+        const uint8_t indirect_jump[] = {0xff, 0x25, 0xfa, 0x00, 0x00, 0x00};
+        assert(gem_memory_write(m, CODE, indirect_jump, sizeof(indirect_jump)) == GEM_MEMORY_OK);
+        gem_x64_runtime_handler_trace_reset(r);
+        init(c);
+        const auto indirect_jump_sp = c.sp;
+        assert(gem_x64_runtime_run(r, &c, 1) == GEM_STOP_BUDGET_EXPIRED);
+        assert(c.pc == indirect_target && c.sp == indirect_jump_sp &&
+               !gem_x64_runtime_last_instruction_was_call(r));
+        assert(gem_x64_runtime_decode_attempt_info(r, &attempt));
+        assert(attempt.valid && attempt.mopcode == 0x0ffU &&
+               attempt.handler_id == BLINK_GEM_HANDLER_OP_JMP_EQ &&
+               !strcmp(attempt.name, "Op0ff") && attempt.rip == CODE);
+
+        /* Operand-size-overridden near indirect branches remain fail-closed;
+         * only the long-mode 64-bit forms used by Wine are admitted. */
+        const uint8_t indirect_jump_16[] = {0x66, 0xff, 0xe0};
+        assert(gem_memory_write(m, CODE, indirect_jump_16, sizeof(indirect_jump_16)) ==
+               GEM_MEMORY_OK);
+        init(c);
+        const auto rejected_indirect = c;
+        assert(gem_x64_runtime_run(r, &c, 1) == GEM_STOP_UNSUPPORTED_INSTRUCTION);
+        assert(c.pc == rejected_indirect.pc && c.sp == rejected_indirect.sp);
+        assert(gem_x64_runtime_decode_attempt_info(r, &attempt));
+        assert(attempt.valid && attempt.mopcode == 0x0ffU && attempt.handler_id == 0U);
+
         /* CALL's return-record write is transactional on an unwritable stack. */
+        assert(gem_memory_write(m, CODE, call, sizeof(call)) == GEM_MEMORY_OK);
         const std::array<uint8_t, 8> call_stack_pattern = {0x10, 0x21, 0x32, 0x43,
                                                            0x54, 0x65, 0x76, 0x87};
         assert(gem_memory_write(m, STACK + 4088U, call_stack_pattern.data(),

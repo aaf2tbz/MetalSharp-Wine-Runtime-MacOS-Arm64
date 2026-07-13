@@ -35,6 +35,7 @@ struct callback_state {
     int corrupt_version;
     int no_progress;
     int terminate;
+    int exit_thread;
     atomic_int block_enabled;
     atomic_int callback_entered;
     atomic_int callback_release;
@@ -77,6 +78,8 @@ static enum gem_wine_status boundary_callback(void *opaque,
         while (atomic_load(&state->callback_release) == 0)
             (void)sched_yield();
     }
+    if (state->exit_thread)
+        pthread_exit(NULL);
 
     if (request->event == GEM_WINE_EVENT_SYSCALL) {
         assert(request->stop.engine_status == UINT32_C(0x123));
@@ -192,6 +195,8 @@ int main(void) {
     struct gem_thread_context unchanged_output;
     struct gem_wine_run_result result;
     struct gem_wine_run_result unchanged_result;
+    struct gem_u128 upper_simd[16];
+    struct gem_u128 upper_simd_output[16];
 
     atomic_init(&callback.block_enabled, 0);
     atomic_init(&callback.callback_entered, 0);
@@ -225,6 +230,9 @@ int main(void) {
     assert(process == NULL);
     assert(gem_wine_process_create(&process_config, &process) == GEM_WINE_OK);
     assert(process != NULL);
+    assert(gem_wine_process_prepare_arm64ec(NULL) == GEM_WINE_INVALID_ARGUMENT);
+    assert(gem_wine_process_prepare_arm64ec(process) == GEM_WINE_OK);
+    assert(gem_wine_process_prepare_arm64ec(process) == GEM_WINE_OK);
     churn.process = process;
     churn.host_page = host_page;
     atomic_init(&churn.failed, 0);
@@ -275,6 +283,15 @@ int main(void) {
     assert(thread == NULL);
     assert(gem_wine_thread_create(process, &thread_config, &thread) == GEM_WINE_OK);
     assert(thread != NULL);
+    assert(gem_wine_process_prepare_arm64ec(process) == GEM_WINE_OK);
+    for (churn_index = 0U; churn_index < 16U; ++churn_index) {
+        upper_simd[churn_index].lo = UINT64_C(0x1111000000000000) + churn_index;
+        upper_simd[churn_index].hi = UINT64_C(0xeeee000000000000) + churn_index;
+    }
+    assert(gem_wine_thread_set_native_upper_simd(thread, upper_simd) == GEM_WINE_OK);
+    memset(upper_simd_output, 0, sizeof(upper_simd_output));
+    assert(gem_wine_thread_get_native_upper_simd(thread, upper_simd_output) == GEM_WINE_OK);
+    assert(memcmp(upper_simd, upper_simd_output, sizeof(upper_simd)) == 0);
     assert(gem_wine_process_destroy(process) == GEM_WINE_CONFLICT);
 
     initialize_context(&input, code);
@@ -299,6 +316,8 @@ int main(void) {
     assert(callback.syscall_count == 1U && callback.unix_count == 1U);
     assert(output.pc == HOST_RETURN && output.x[0] == UINT64_C(0x99));
     assert(output.x[18] == TEST_TEB);
+    assert(gem_wine_thread_get_native_upper_simd(thread, upper_simd_output) == GEM_WINE_OK);
+    assert(memcmp(upper_simd, upper_simd_output, sizeof(upper_simd)) == 0);
 
     store_word(mapping, CODE_OFFSET, LDR_X2_X0);
     store_word(mapping, CODE_OFFSET + 4U, RET);
@@ -375,6 +394,15 @@ int main(void) {
     assert(runner.result.outcome == GEM_WINE_RUN_COMPLETE);
     assert(runner.output.pc == HOST_RETURN);
 
+    memset(&runner, 0, sizeof(runner));
+    runner.thread = thread;
+    initialize_context(&runner.input, code);
+    callback.exit_thread = 1;
+    assert(pthread_create(&runner_thread, NULL, run_thread, &runner) == 0);
+    assert(pthread_join(runner_thread, NULL) == 0);
+    callback.exit_thread = 0;
+    /* pthread_exit() from a Wine boundary must release the bridge run lock so
+     * a joined guest thread can be destroyed without leaking its runtime. */
     assert(gem_wine_thread_destroy(thread) == GEM_WINE_OK);
     thread = NULL;
     thread_config.boundary = NULL;
