@@ -8,6 +8,7 @@ import importlib.util
 import json
 import os
 import shutil
+import struct
 import subprocess
 import tarfile
 import tempfile
@@ -28,6 +29,13 @@ if STAGER_SPEC is None or STAGER_SPEC.loader is None:
     raise RuntimeError("could not load runtime stager")
 STAGER = importlib.util.module_from_spec(STAGER_SPEC)
 STAGER_SPEC.loader.exec_module(STAGER)
+
+PACKAGED_SPEC = importlib.util.spec_from_file_location(
+    "test_packaged_runtime", ROOT / "tools/release/test-packaged-runtime.py")
+if PACKAGED_SPEC is None or PACKAGED_SPEC.loader is None:
+    raise RuntimeError("could not load packaged runtime tester")
+PACKAGED = importlib.util.module_from_spec(PACKAGED_SPEC)
+PACKAGED_SPEC.loader.exec_module(PACKAGED)
 
 
 def digest(path: Path) -> str:
@@ -193,14 +201,36 @@ class ReleaseToolTests(unittest.TestCase):
         self.assertIn(b"lib", scrubbed)
         self.assertIn(b"/usr/share", scrubbed)
 
-    def test_rewrites_macos27_fd_imports_without_resizing(self) -> None:
-        original = b"symbols\0_pipe2\0middle\0_dup3\0end"
-        compatible = STAGER.replace_macos27_fd_imports(original)
-        self.assertEqual(len(compatible), len(original))
-        self.assertNotIn(b"_pipe2\0", compatible)
-        self.assertNotIn(b"_dup3\0", compatible)
-        self.assertIn(b"_pipe\0\0", compatible)
-        self.assertIn(b"_dup2\0", compatible)
+    def test_rebinds_chained_import_without_resizing(self) -> None:
+        library = b"@rpath/libmetalsharp-gem-wine.0.dylib\0"
+        dylib_size = (24 + len(library) + 7) & ~7
+        dylib = (struct.pack("<6I", 0x0c, dylib_size, 24, 0, 0, 0) + library)
+        dylib += bytes(dylib_size - len(dylib))
+        command_size = dylib_size + 16
+        data_offset = 32 + command_size
+        fixups = struct.pack("<4I", 0x80000034, 16, data_offset, 39)
+        header = struct.pack("<7I", 0, 0, 28, 32, 1, 1, 0)
+        chained_import = struct.pack("<I", 2) + b"_pipe2\0"
+        macho = (struct.pack("<8I", 0xfeedfacf, 0, 0, 0, 2, command_size, 0, 0) +
+                 dylib + fixups + header + chained_import)
+        rebound = STAGER.rebind_chained_import(
+            macho, "_pipe2", "@rpath/libmetalsharp-gem-wine.0.dylib")
+        self.assertEqual(len(rebound), len(macho))
+        self.assertEqual(struct.unpack_from("<I", rebound, data_offset + 28)[0] & 0xff, 1)
+
+    def test_prefix_readiness_requires_complete_nonempty_install(self) -> None:
+        prefix = self.directory / "prefix"
+        prefix.mkdir()
+        missing, snapshot = PACKAGED.prefix_snapshot(prefix)
+        self.assertEqual(set(missing), set(PACKAGED.PREFIX_READY_FILES))
+        self.assertEqual(snapshot, {})
+        for relative in PACKAGED.PREFIX_READY_FILES:
+            path = prefix / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(relative.encode("utf-8"))
+        missing, snapshot = PACKAGED.prefix_snapshot(prefix)
+        self.assertEqual(missing, [])
+        self.assertEqual(set(snapshot), set(PACKAGED.PREFIX_READY_FILES))
 
     def test_verifies_published_asset_digests(self) -> None:
         fake_bin = self.directory / "fake-bin"

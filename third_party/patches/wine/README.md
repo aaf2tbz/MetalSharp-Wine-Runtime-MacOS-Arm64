@@ -78,6 +78,20 @@ is not a release input.
       callback, suspension, exception, and return state;
     - fails closed when validated metadata cannot be attached or execution
       violates the bounded transition contract.
+11. `0011-setupapi-add-bounded-native-bootstrap-mode.patch`
+    - lets the relocatable launcher finish native `DefaultInstall` after an
+      early-returning bootstrap Wineboot;
+    - suppresses only fake-DLL `WINE_REGISTRY` resources during that explicit
+      recovery pass while retaining manifest registration;
+   - leaves ordinary setupapi installation behavior unchanged.
+12. `0012-ntdll-preserve-hybrid-budget-context.patch`
+   - preserves the complete GEM ARM64EC/x64 coordinator context across ordinary
+     instruction-budget slices instead of round-tripping through Wine's
+     ARM-only syscall frame;
+   - publishes a resumable ARM64EC frame only when Wine has an actual pending
+     suspend or externally supplied context;
+   - defers an in-flight hybrid suspend until the coordinator reaches an
+     ARM64EC boundary that Wine's public context machinery can represent.
 
 ## Current evidence and limitation
 

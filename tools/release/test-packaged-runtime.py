@@ -16,8 +16,72 @@ import threading
 import time
 
 
+PREFIX_READY_FILES = (
+    ".update-timestamp",
+    "system.reg",
+    "user.reg",
+    "userdef.reg",
+    "drive_c/windows/system32/kernel32.dll",
+    "drive_c/windows/system32/ntdll.dll",
+    "drive_c/windows/system32/services.exe",
+)
+
+
 def fail(message: str) -> None:
     raise SystemExit(f"packaged runtime test failed: {message}")
+
+
+def prefix_snapshot(prefix: pathlib.Path) -> tuple[list[str], dict[str, dict[str, int]]]:
+    missing: list[str] = []
+    snapshot: dict[str, dict[str, int]] = {}
+    for relative in PREFIX_READY_FILES:
+        path = prefix / relative
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            missing.append(relative)
+            continue
+        if not path.is_file() or stat.st_size == 0:
+            missing.append(relative)
+            continue
+        snapshot[relative] = {"size": stat.st_size, "mtimeNs": stat.st_mtime_ns}
+    return missing, snapshot
+
+
+def wait_for_prefix_ready(prefix: pathlib.Path, evidence: pathlib.Path, timeout: int) -> None:
+    """Wait for wine.inf installation to finish, not merely wineboot's parent."""
+    started = time.monotonic()
+    deadline = started + timeout
+    previous: dict[str, dict[str, int]] | None = None
+    stable_since: float | None = None
+    observations: list[dict[str, object]] = []
+    while time.monotonic() < deadline:
+        missing, snapshot = prefix_snapshot(prefix)
+        now = time.monotonic()
+        if not missing and snapshot == previous:
+            stable_since = now if stable_since is None else stable_since
+        else:
+            stable_since = None
+        if len(observations) < 240:
+            observations.append({"elapsedSeconds": round(now - started, 3),
+                                 "missing": missing, "files": snapshot})
+        if not missing and stable_since is not None and now - stable_since >= 5:
+            (evidence / "wineboot-prefix-readiness.json").write_text(
+                json.dumps({"ready": True, "requiredFiles": list(PREFIX_READY_FILES),
+                            "durationSeconds": round(now - started, 3),
+                            "observations": observations}, sort_keys=True,
+                           separators=(",", ":")) + "\n", encoding="utf-8")
+            return
+        previous = snapshot
+        time.sleep(0.5)
+    missing, snapshot = prefix_snapshot(prefix)
+    (evidence / "wineboot-prefix-readiness.json").write_text(
+        json.dumps({"ready": False, "requiredFiles": list(PREFIX_READY_FILES),
+                    "durationSeconds": round(time.monotonic() - started, 3),
+                    "missing": missing, "files": snapshot, "observations": observations},
+                   sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+    fail(f"wineboot prefix did not become complete and stable within {timeout} seconds; "
+         f"missing={missing}")
 
 
 def main() -> None:
@@ -138,17 +202,30 @@ def main() -> None:
                         "timeoutSeconds": timeout,
                         "logSha256": __import__("hashlib").sha256(log.read_bytes()).hexdigest()})
 
+    def quiesce_wineserver() -> None:
+        stopped = subprocess.run([str(wineserver), "-k"], env=env, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL, timeout=30, check=False)
+        waited = subprocess.run([str(wineserver), "-w"], env=env, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, timeout=30, check=False)
+        if stopped.returncode not in (0, 1) or waited.returncode:
+            fail(f"wineboot server quiesce failed: kill={stopped.returncode}, "
+                 f"wait={waited.returncode}")
+
     try:
         run_test("wineboot-init", [str(runtime / "bin/wineboot"), "--init"],
-                 ("native ARM64 GEM launch image=",), timeout=60, trace_gem=True)
+                 ("native ARM64 GEM launch image=",), timeout=60)
+        wait_for_prefix_ready(prefix, args.evidence, min(args.timeout, 120))
+        quiesce_wineserver()
+        run_test("arm64-cmd-exit", [str(wine), "cmd.exe", "/c", "exit"],
+                 ("native ARM64 GEM launch image=",), timeout=60)
         run_test("arm64-gem-acceptance", [str(wine), "metalsharp-gem-acceptance.exe"],
                  ("metalsharp-gem-acceptance: passed", "boundary syscall"),
                  timeout=120, trace_gem=True)
-        run_test("arm64-cmd-exit", [str(wine), "cmd.exe", "/c", "exit"],
-                 ("native ARM64 GEM launch image=",), timeout=60)
+        quiesce_wineserver()
         run_test("arm64ec-x64-hybrid", [str(wine), str(selftest / "arm64x_fixture_host.exe")],
-                 ("ARM64X linked fixture native execution passed",), timeout=120)
+                 ("ARM64X linked fixture native execution passed",), timeout=120, trace_gem=True)
         for index in range(args.stress_iterations):
+            quiesce_wineserver()
             run_test(f"hybrid-stress-{index + 1:03d}",
                      [str(wine), str(selftest / "arm64x_fixture_host.exe")],
                      ("ARM64X linked fixture native execution passed",), timeout=120)
@@ -161,7 +238,10 @@ def main() -> None:
         fail("translated package process observed: " + "; ".join(translated))
     combined = "".join(path.read_text(encoding="utf-8", errors="replace")
                        for path in sorted(args.evidence.glob("*.log")))
-    for marker in ("boundary syscall", "boundary unix-call", "callback enter", "callback return"):
+    for marker in ("boundary syscall", "boundary unix-call",
+                   "metalsharp-gem-acceptance: access-violation=continued",
+                   "metalsharp-gem-acceptance: guard=consumed",
+                   "metalsharp-gem-acceptance: thread=create,suspend,resume,exit"):
         if marker not in combined:
             fail(f"combined packaged evidence lacks {marker!r}")
     time.sleep(1)

@@ -40,9 +40,11 @@ The external `release-manifest.json` is canonical JSON and binds:
 
 The archive's `runtime-manifest.json` binds release and component identities without attempting a cryptographic self-reference. The external publication manifest is authoritative for the archive digest and the complete in-archive inventory, including the internal manifest itself.
 
-No absolute path, home-directory name, runner-temporary path, token, Wine prefix, crash report, generated debug file, source checkout, or unlisted file may appear in the package. The unpacked runtime must operate from an arbitrary clean location while the repository and build trees are unavailable. Every redistributable non-system runtime dependency must be contained in the archive with a relocatable binding; Homebrew paths, adjacent developer checkouts, and temporary install trees are forbidden runtime dependencies.
+No build path may appear in a host Mach-O load command, rpath, or executable string table; data files may contain path-shaped locale input that is not executable loader state. Tokens, Wine prefixes, crash reports, generated debug files, source checkouts, and unlisted files may not appear in the package. The unpacked runtime must operate from an arbitrary clean location while the repository and build trees are unavailable. Every redistributable non-system runtime dependency must be contained in the archive with a relocatable binding; Homebrew paths, adjacent developer checkouts, and temporary install trees are forbidden runtime dependencies.
 
 `wine-integration-evidence.json` binds bounded fresh-prefix results for `wineboot --init`, ARM64 `cmd.exe /c exit`, and accepted ARM64EC/x64 hybrid execution. It also records canonical x18/TEB checks, engine provenance, instruction/transition budgets, process architecture observations, timeout/log limits, and cleanup results.
+
+Packaged verification does not equate the initial `wineboot` process exit with prefix completion. The relocatable `wineboot` launcher uses the bounded native bootstrap mode from its first initialization pass: callback-heavy fake-DLL registry resources are suppressed while manifests and the complete staged PE tree are retained. If the first pass is incomplete, the launcher runs the same bounded `DefaultInstall` path to completion. It requires the update timestamp, all three registry hives, and installed ARM64 `kernel32.dll`, `ntdll.dll`, and `services.exe` to remain stable, then quiesces the initialization wineserver and proves a clean `cmd.exe` restart before launching GEM and hybrid tests. Release CI requires three fully isolated clean-prefix runs to pass; they are independent required trials, not retries.
 
 ## Architecture and execution audit
 
@@ -80,7 +82,7 @@ The local publication command compares both independently staged archives before
 
 The release is created as a draft by the native ARM64 release operator. CI redownloads every uploaded asset into a new directory, reconstructs the release-notes input from the draft body, validates all digests and archive members, unpacks the downloaded archive, and repeats fresh-prefix native ARM64 and authentic ARM64EC/x64 smoke tests. Only that successful redownloaded package can be made public.
 
-For macOS 15 compatibility, staging lowers host Mach-O deployment metadata and rewrites the SDK 27-only `pipe2` and `dup3` imports to the layout-preserving ARM64 legacy entry points `pipe` and `dup2`. The audit rejects either SDK 27-only import if it survives staging; packaged tests cover fresh-prefix startup, GEM execution, hybrid execution, and teardown.
+For macOS 15 compatibility, the GEM bridge supplies semantic `pipe2` and `dup3` implementations using older descriptor primitives while preserving `O_CLOEXEC` and `O_NONBLOCK`. Staging lowers host Mach-O deployment metadata and rebinds native ntdll's existing `pipe2` chained import to the bridge without adding a load command. The audit rejects `dup3` imports and any `pipe2` import not bound to that bridge.
 
 ## Reproduce the candidate locally
 

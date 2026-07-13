@@ -1,0 +1,35 @@
+From 66220c5789ff3448be17c952b9685b16e89023a9 Mon Sep 17 00:00:00 2001
+From: Avery Felts <averyfelts@users.noreply.github.com>
+Date: Mon, 13 Jul 2026 14:00:00 -0600
+Subject: [PATCH 11/11] setupapi: add bounded native bootstrap mode
+
+The native Darwin ARM64 launcher may need to complete the file-copy portion of
+DefaultInstall after the bootstrap wineboot parent has returned.  Embedded
+WINE_REGISTRY resources are exceptionally callback-heavy under the correctness
+engine and are not required to create the core prefix files used to restart the
+server cleanly.  Allow the packaged launcher to suppress only that registration
+pass during its explicit, bounded recovery invocation.  Manifest registration
+is intentionally retained, and normal setupapi users are unchanged.
+
+This patch is distributed under Wine's LGPL-2.1-or-later terms.
+---
+ dlls/setupapi/fakedll.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/dlls/setupapi/fakedll.c b/dlls/setupapi/fakedll.c
+index 9daef65..31a5a4e 100644
+--- a/dlls/setupapi/fakedll.c
++++ b/dlls/setupapi/fakedll.c
+@@ -904,6 +904,10 @@ static void register_fake_dll( const WCHAR *name, const void *data, size_t size,
+ 
+     EnumResourceNamesW( module, (WCHAR*)RT_MANIFEST, register_manifest, (LONG_PTR)&dll_data );
+ 
++    if (GetEnvironmentVariableW( L"METALSHARP_WINEBOOT_SKIP_FAKE_REGISTRY", buffer,
++                                 ARRAY_SIZE(buffer) ))
++        return;
++
+     info.Type = (ULONG_PTR)L"WINE_REGISTRY";
+     if (LdrFindResourceDirectory_U( module, &info, 1, &resdir )) return;
+ 
+-- 
+2.50.1

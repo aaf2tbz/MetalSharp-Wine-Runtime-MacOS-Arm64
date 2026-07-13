@@ -51,6 +51,7 @@ struct gem_wine_thread {
     struct gem_wine_thread *next;
     struct gem_arm64ec_runtime *runtime;
     struct gem_wine_hybrid_binding *hybrids;
+    struct gem_wine_hybrid_binding *coordinator_hybrid;
     _Atomic(struct gem_hybrid_runtime *) active_hybrid;
     struct gem_wine_thread_config config;
     pthread_mutex_t run_lock;
@@ -695,6 +696,7 @@ enum gem_wine_status gem_wine_thread_run(struct gem_wine_thread *thread,
     for (;;) {
         struct gem_wine_stop_info stop;
         struct gem_wine_arm64x_image *image;
+        struct gem_wine_hybrid_binding *hybrid_binding;
         enum gem_stop_reason reason;
         uint64_t remaining;
         uint64_t budget;
@@ -716,26 +718,33 @@ enum gem_wine_status gem_wine_thread_run(struct gem_wine_thread *thread,
         image = atomic_load_explicit(&process->arm64x_routing_enabled, memory_order_acquire)
                     ? find_image_for_pc(process, context.pc)
                     : NULL;
-        if (image != NULL) {
-            struct gem_wine_hybrid_binding *binding = find_or_create_hybrid(thread, image);
+        hybrid_binding = thread->coordinator_hybrid;
+        if (hybrid_binding == NULL && image != NULL) {
+            hybrid_binding = find_or_create_hybrid(thread, image);
+            thread->coordinator_hybrid = hybrid_binding;
+        }
+        if (hybrid_binding != NULL) {
             struct gem_hybrid_roundtrip_stats stats;
             struct gem_hybrid_stop_info hybrid_stop;
             uint64_t retired;
-            if (binding == NULL) {
+            if (hybrid_binding == NULL) {
                 (void)pthread_mutex_unlock(&thread->runtime_lock);
                 status = GEM_WINE_ENGINE_ERROR;
                 break;
             }
-            atomic_store_explicit(&thread->active_hybrid, binding->runtime, memory_order_release);
-            reason = gem_hybrid_runtime_run(binding->runtime, &context, budget, &stats);
+            atomic_store_explicit(&thread->active_hybrid, hybrid_binding->runtime,
+                                  memory_order_release);
+            reason = gem_hybrid_runtime_run(hybrid_binding->runtime, &context, budget, &stats);
             atomic_store_explicit(&thread->active_hybrid, NULL, memory_order_release);
             retired = stats.arm64ec_instructions_retired + stats.x64_instructions_retired;
-            if (!gem_hybrid_runtime_last_stop_info(binding->runtime, &hybrid_stop) ||
+            if (!gem_hybrid_runtime_last_stop_info(hybrid_binding->runtime, &hybrid_stop) ||
                 !copy_hybrid_stop_info(&stop, &hybrid_stop, retired)) {
                 (void)pthread_mutex_unlock(&thread->runtime_lock);
                 status = GEM_WINE_ENGINE_ERROR;
                 break;
             }
+            if (!gem_hybrid_runtime_coordinator_active(hybrid_binding->runtime))
+                thread->coordinator_hybrid = NULL;
         } else {
             struct gem_arm64ec_stop_info arm_stop;
             if (context.isa != GEM_ISA_ARM64EC) {
@@ -765,7 +774,7 @@ enum gem_wine_status gem_wine_thread_run(struct gem_wine_thread *thread,
             break;
         }
         if (reason == GEM_STOP_ARCH_TRANSITION &&
-            (image != NULL ||
+            (hybrid_binding != NULL ||
              (atomic_load_explicit(&process->arm64x_routing_enabled, memory_order_acquire) &&
               find_image_for_pc(process, context.pc) != NULL))) {
             context.stop_reason = GEM_STOP_NONE;
@@ -781,8 +790,17 @@ enum gem_wine_status gem_wine_thread_run(struct gem_wine_thread *thread,
              * The engine budget is a scheduling slice, not the public Wine
              * run budget.  Keep executing inside the bridge until the total
              * budget is exhausted so routine JIT slices do not bounce through
-             * ntdll and rebuild the Wine/GEM thread context each time.
+             * ntdll and rebuild the Wine/GEM thread context each time.  A
+             * zero-progress yield means the next translated block does not
+             * fit in the remaining public budget.  Return that yield so ntdll
+             * can resume with a fresh budget instead of retrying the same
+             * remainder forever.
              */
+            if (stop.instructions_retired == 0U) {
+                run_result.outcome = GEM_WINE_RUN_BUDGET_EXPIRED;
+                status = GEM_WINE_BUDGET_EXPIRED;
+                break;
+            }
             context.stop_reason = GEM_STOP_NONE;
             continue;
         }

@@ -539,6 +539,10 @@ bool gem_hybrid_runtime_last_stop_info(const struct gem_hybrid_runtime *runtime,
     return true;
 }
 
+bool gem_hybrid_runtime_coordinator_active(const struct gem_hybrid_runtime *runtime) {
+    return runtime != NULL && runtime->generic.active;
+}
+
 void gem_hybrid_runtime_destroy(struct gem_hybrid_runtime *runtime) {
     if (runtime != NULL) {
         gem_x64_runtime_destroy(runtime->x64);
