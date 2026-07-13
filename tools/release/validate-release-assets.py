@@ -17,20 +17,23 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-ARCHIVE = "metalsharp-wine-v0.1.0-macos-arm64.tar.zst"
-ASSETS = {
-    ARCHIVE,
-    f"{ARCHIVE}.sha256",
-    "release-manifest.json",
-    "wine-integration-evidence.json",
-    "sbom.spdx.json",
-    "evidence-index.json",
-    "KNOWN-LIMITATIONS.md",
-    "RELEASE-NOTES.md",
-}
 REQUIRED_TESTS = {"wineboot-init", "arm64-cmd-exit", "arm64ec-x64-hybrid"}
 HEX40 = re.compile(r"[0-9a-f]{40}\Z")
 HEX64 = re.compile(r"[0-9a-f]{64}\Z")
+VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?\Z")
+
+
+def archive_name(version: str) -> str:
+    if not VERSION.fullmatch(version):
+        fail(f"version is invalid: {version!r}")
+    return f"metalsharp-wine-v{version}-macos-arm64.tar.zst"
+
+
+def asset_names(version: str) -> set[str]:
+    archive = archive_name(version)
+    return {archive, f"{archive}.sha256", "release-manifest.json",
+            "wine-integration-evidence.json", "sbom.spdx.json", "evidence-index.json",
+            "KNOWN-LIMITATIONS.md", "RELEASE-NOTES.md"}
 
 
 def fail(message: str) -> None:
@@ -79,7 +82,8 @@ def binding(value: dict[str, Any], repository: str, commit: str, version: str, w
 
 
 def validate_manifest(path: Path, repository: str, commit: str, version: str,
-                      archive_hash: str, archive_size: int) -> None:
+                      archive: str, assets: set[str], archive_hash: str,
+                      archive_size: int) -> None:
     value = load_json(path)
     exact_keys(value, {"schema", "release", "components", "winePatches", "bridge", "toolchain",
                        "package", "evidence"}, path.name)
@@ -135,7 +139,7 @@ def validate_manifest(path: Path, repository: str, commit: str, version: str,
         fail("manifest package is not an object")
     exact_keys(package, {"name", "sha256", "size", "sourceDateEpoch", "files"},
                "manifest package")
-    if package["name"] != ARCHIVE or package["sha256"] != archive_hash:
+    if package["name"] != archive or package["sha256"] != archive_hash:
         fail("manifest archive name/hash mismatch")
     if package["size"] != archive_size or not isinstance(package["sourceDateEpoch"], int):
         fail("manifest archive size/timestamp mismatch")
@@ -150,14 +154,15 @@ def validate_manifest(path: Path, repository: str, commit: str, version: str,
         if not isinstance(record, dict) or set(record) != {"path", "sha256"}:
             fail(f"manifest evidence binding {name} is invalid")
         asset = path.parent / record["path"]
-        if asset.name != record["path"] or asset.name not in ASSETS or not asset.is_file():
+        if asset.name != record["path"] or asset.name not in assets or not asset.is_file():
             fail(f"manifest evidence binding {name} has an unsafe path")
         if record["sha256"] != sha256(asset):
             fail(f"manifest evidence binding {name} hash mismatch")
 
 
-def validate_archive(directory: Path, manifest: dict[str, Any]) -> None:
-    archive = directory / ARCHIVE
+def validate_archive(directory: Path, manifest: dict[str, Any], archive_name_value: str,
+                     version: str) -> None:
+    archive = directory / archive_name_value
     zstd = shutil.which("zstd")
     if not zstd and sys.platform == "darwin":
         candidate = Path("/opt/homebrew/opt/zstd/bin/zstd")
@@ -172,7 +177,7 @@ def validate_archive(directory: Path, manifest: dict[str, Any]) -> None:
                                     stderr=subprocess.PIPE, check=False)
         if result.returncode:
             fail(f"archive is not valid Zstandard: {result.stderr.decode(errors='replace').strip()}")
-        expected_top = "metalsharp-wine-v0.1.0-macos-arm64"
+        expected_top = f"metalsharp-wine-v{version}-macos-arm64"
         records = manifest["package"]["files"]
         by_path = {record.get("path"): record for record in records if isinstance(record, dict)}
         if len(by_path) != len(records) or None in by_path:
@@ -305,6 +310,8 @@ def main() -> None:
     parser.add_argument("--commit", required=True)
     parser.add_argument("--version", required=True)
     args = parser.parse_args()
+    archive_name_value = archive_name(args.version)
+    assets = asset_names(args.version)
     if not HEX40.fullmatch(args.commit):
         fail("commit is not a lowercase full Git SHA")
     directory = args.directory.resolve()
@@ -312,22 +319,22 @@ def main() -> None:
         fail("asset directory is missing")
     entries = list(directory.iterdir())
     names = {entry.name for entry in entries}
-    if names != ASSETS:
-        fail(f"asset names are {sorted(names)}, expected {sorted(ASSETS)}")
+    if names != assets:
+        fail(f"asset names are {sorted(names)}, expected {sorted(assets)}")
     for entry in entries:
         mode = entry.lstat().st_mode
         if not stat.S_ISREG(mode) or entry.is_symlink():
             fail(f"asset {entry.name} is not a regular file")
-        if entry.name != ARCHIVE:
+        if entry.name != archive_name_value:
             data = entry.read_bytes()
             for forbidden in (b"/Users/", b"/home/runner/", b"/private/var/", b"/opt/homebrew/"):
                 if forbidden in data:
                     fail(f"asset {entry.name} leaks a private or build path")
 
-    archive = directory / ARCHIVE
+    archive = directory / archive_name_value
     archive_hash = sha256(archive)
-    checksum = (directory / f"{ARCHIVE}.sha256").read_text(encoding="ascii")
-    if checksum != f"{archive_hash}  {ARCHIVE}\n":
+    checksum = (directory / f"{archive_name_value}.sha256").read_text(encoding="ascii")
+    if checksum != f"{archive_hash}  {archive_name_value}\n":
         fail("archive checksum file is not exact")
     manifest = load_json(directory / "release-manifest.json")
     validate_integration(directory / "wine-integration-evidence.json", args.repository,
@@ -337,8 +344,9 @@ def main() -> None:
     validate_text(directory / "KNOWN-LIMITATIONS.md")
     validate_text(directory / "RELEASE-NOTES.md")
     validate_manifest(directory / "release-manifest.json", args.repository, args.commit,
-                      args.version, archive_hash, archive.stat().st_size)
-    validate_archive(directory, manifest)
+                      args.version, archive_name_value, assets, archive_hash,
+                      archive.stat().st_size)
+    validate_archive(directory, manifest, archive_name_value, args.version)
     print("integrated Wine release asset validation passed")
 
 

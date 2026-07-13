@@ -36,9 +36,14 @@ jobs:
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body \
             > "$assets/RELEASE-NOTES.md"
           commit="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json targetCommitish --jq .targetCommitish)"
-          shasum -a 256 -c "$assets/metalsharp-wine-v0.1.0-macos-arm64.tar.zst.sha256"
+          version="${TAG#v}"
+          archive="metalsharp-wine-v${version}-macos-arm64.tar.zst"
+          (
+            cd "$assets"
+            shasum -a 256 -c "$archive.sha256"
+          )
           python3 tools/release/validate-release-assets.py --directory "$assets" \
-            --repository "$GITHUB_REPOSITORY" --commit "$commit" --version 0.1.0
+            --repository "$GITHUB_REPOSITORY" --commit "$commit" --version "$version"
           python3 tools/release/verify-published-release.py --directory "$assets" \
             --repository "$GITHUB_REPOSITORY" --tag "$TAG" --commit "$commit" \
             --no-expect-draft
@@ -49,10 +54,12 @@ jobs:
           brew install zstd
           assets="${RUNNER_TEMP}/metalsharp-wine-assets"
           root="${RUNNER_TEMP}/metalsharp-wine-runtime"
+          version="${TAG#v}"
+          archive="metalsharp-wine-v${version}-macos-arm64.tar.zst"
           mkdir -p "$root"
           "$(brew --prefix zstd)/bin/zstd" -d --stdout \
-            "$assets/metalsharp-wine-v0.1.0-macos-arm64.tar.zst" | tar -xf - -C "$root"
-          runtime="$root/metalsharp-wine-v0.1.0-macos-arm64"
+            "$assets/$archive" | tar -xf - -C "$root"
+          runtime="$root/metalsharp-wine-v${version}-macos-arm64"
           python3 tools/release/audit-runtime.py --root "$runtime"
           python3 tools/release/test-packaged-runtime.py --runtime "$runtime" \
             --evidence "${RUNNER_TEMP}/published-release-evidence" \
