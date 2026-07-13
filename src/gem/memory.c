@@ -462,7 +462,7 @@ static enum gem_memory_error access_memory_locked(struct gem_memory *m, uint64_t
                 free(ps);
                 return GEM_MEMORY_GUARD_PAGE;
             }
-    if (w) {
+    if (w && !query) {
         copies = calloc(pages, sizeof(*copies));
         if (!copies) {
             free(ps);

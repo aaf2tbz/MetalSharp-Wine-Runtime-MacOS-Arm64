@@ -61,7 +61,8 @@ if [[ -z "$brew_prefix" ]] && command -v brew >/dev/null; then brew_prefix=$(bre
     echo "Homebrew prefix is required for the pinned native dependency set" >&2; exit 1;
 }
 brew_opt="$brew_prefix/opt"
-for required in bison freetype vulkan-headers vulkan-loader mesa sdl2-compat sdl3; do
+for required in bison boost freetype libpng libx11 libxau libxcb libxdmcp llvm mesa molten-vk \
+    sdl2-compat sdl3 spirv-tools vulkan-headers vulkan-loader z3 zstd; do
     [[ -d "$brew_opt/$required" ]] || { echo "missing Homebrew dependency: $required" >&2; exit 1; }
     expected=$(python3 - "$lock" "$required" <<'PY'
 import json, sys
@@ -131,7 +132,7 @@ trap 'rm -rf "$work"' EXIT INT TERM
 source_dir="$work/wine"
 build_dir="$work/build"
 stage="$work/stage"
-prefix="$stage/wine"
+prefix="$stage"
 gem_build="$work/gem-build"
 gem_prefix="$work/gem-prefix"
 [[ "$(git -C "$root" rev-parse HEAD)" == "$commit" ]] || {
@@ -169,23 +170,27 @@ export x86_64_CC="$llvm_mingw/bin/x86_64-w64-mingw32-clang"
 export aarch64_CC="$llvm_mingw/bin/aarch64-w64-mingw32-clang"
 export arm64ec_CC="$llvm_mingw/bin/arm64ec-w64-mingw32-clang"
 configure=("$source_dir/configure" "--host=aarch64-apple-darwin"
-    "--enable-archs=i386,x86_64,aarch64,arm64ec" "--with-mingw=xllvm-mingw" "--with-x"
+    "--enable-archs=i386,x86_64,aarch64,arm64ec" "--with-mingw=xllvm-mingw" "--without-x"
     "--with-opengl" "--with-vulkan" "--with-sdl" "--with-metalsharp-gem=$gem_prefix"
-    "--prefix=$prefix"
+    "--without-dbus" "--without-ffmpeg" "--without-fontconfig" "--without-gettext"
+    "--without-gphoto" "--without-gnutls" "--without-gssapi" "--without-gstreamer"
+    "--without-krb5" "--without-netapi" "--without-opencl" "--without-pcap"
+    "--without-pcsclite" "--without-sane" "--without-usb" "--without-wayland"
+    "--prefix=/"
     "BISON=$brew_opt/bison/bin/bison" "FLEX=$(command -v flex)"
     "i386_CC=$llvm_mingw/bin/i686-w64-mingw32-clang"
     "x86_64_CC=$llvm_mingw/bin/x86_64-w64-mingw32-clang"
     "aarch64_CC=$llvm_mingw/bin/aarch64-w64-mingw32-clang"
     "arm64ec_CC=$llvm_mingw/bin/arm64ec-w64-mingw32-clang"
     "CC=/usr/bin/clang" "CXX=/usr/bin/clang++"
-    "CFLAGS=-O2 -g -arch arm64" "CXXFLAGS=-O2 -g -arch arm64"
+    "CFLAGS=-O2 -g0 -arch arm64" "CXXFLAGS=-O2 -g0 -arch arm64"
     "LDFLAGS=-arch arm64 -L$brew_prefix/lib -framework OpenGL"
     "CPPFLAGS=-I$brew_prefix/include" "OPENGL_LIBS=-framework OpenGL" "OPENGL_CFLAGS=")
 (
     cd "$build_dir"
     "${configure[@]}" 2>&1 | tee "$work/configure.log"
     make -j"$jobs" 2>&1 | tee "$work/build.log"
-    make install 2>&1 | tee "$work/install.log"
+    make install DESTDIR="$stage" 2>&1 | tee "$work/install.log"
 )
 cmake --install "$gem_build" --prefix "$prefix" --component metalsharp-gem-wine
 runtime_dir="$prefix/lib/wine/aarch64-unix"
@@ -423,6 +428,16 @@ done < <(find "$stage" -type f | sort)
 "$root/tools/ci/audit-zero-rosetta.sh" "$stage" | tee "$work/zero-rosetta-audit.txt"
 cp -R "$prefix" "$output/wine"
 cp -R "$acceptance_dir" "$output/evidence"
+mkdir -p "$output/licenses"
+install -m 644 "$source_dir/COPYING.LIB" "$output/licenses/LGPL-2.1-or-later-Wine.txt"
+install -m 644 "$gem_build/_deps/dynarmic-src/LICENSE.txt" "$output/licenses/ISC-Dynarmic.txt"
+install -m 644 "$gem_build/_deps/blink_gem-src/LICENSE" "$output/licenses/ISC-Blink.txt"
+install -m 644 "$gem_build/_deps/dynarmic-src/externals/mcl/LICENSE" "$output/licenses/MIT-mcl.txt"
+install -m 644 "$gem_build/_deps/dynarmic-src/externals/fmt/LICENSE.rst" "$output/licenses/MIT-fmt.rst"
+install -m 644 "$gem_build/_deps/dynarmic-src/externals/oaknut/LICENSE" "$output/licenses/MIT-oaknut.txt"
+install -m 644 "$gem_build/_deps/dynarmic-src/externals/robin-map/LICENSE" "$output/licenses/MIT-robin-map.txt"
+install -m 644 "$llvm_mingw/LICENSE.TXT" "$output/licenses/Apache-2.0-WITH-LLVM-exception-LLVM-MinGW.txt"
+install -m 644 "$brew_opt/boost/LICENSE_1_0.txt" "$output/licenses/BSL-1.0-Boost.txt"
 clang --version > "$work/clang-version.txt"
 make --version > "$work/make-version.txt"
 xcrun --show-sdk-version > "$work/sdk-version.txt"
@@ -435,7 +450,7 @@ jobs = sys.argv[6]
 llvm, brew, deps = map(pathlib.Path, sys.argv[7:10])
 repository_commit = sys.argv[10]
 lock = json.loads(lock_path.read_text(encoding="utf-8")); wine = lock["components"]["wine"]
-stage = pathlib.Path(prefix).parent
+stage = pathlib.Path(prefix)
 def text(name): return (pathlib.Path(work) / name).read_text(encoding="utf-8", errors="replace").strip()
 files = []
 for path in sorted(p for p in stage.rglob("*") if p.is_file() or p.is_symlink()):
@@ -454,7 +469,7 @@ for path in sorted(p for p in evidence.rglob("*") if p.is_file()):
 value = {"schema": 1, "kind": "wine-foundation", "repositoryCommit": repository_commit,
          "source": {"repository": wine["repository"], "revision": wine["revision"],
                      "patchedHead": subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()},
-         "wine": {"version": wine["version"], "configure": ["--host=aarch64-apple-darwin", "--enable-archs=i386,x86_64,aarch64,arm64ec", "--with-mingw=xllvm-mingw", "--with-x", "--with-opengl", "--with-vulkan", "--with-sdl", "--with-metalsharp-gem=<external-prefix>"]},
+         "wine": {"version": wine["version"], "configure": ["--host=aarch64-apple-darwin", "--enable-archs=i386,x86_64,aarch64,arm64ec", "--with-mingw=xllvm-mingw", "--without-x", "--with-opengl", "--with-vulkan", "--with-sdl", "--with-metalsharp-gem=<external-prefix>", "--prefix=/", "--without-dbus", "--without-ffmpeg", "--without-fontconfig", "--without-gettext", "--without-gphoto", "--without-gnutls", "--without-gssapi", "--without-gstreamer", "--without-krb5", "--without-netapi", "--without-opencl", "--without-pcap", "--without-pcsclite", "--without-sane", "--without-usb", "--without-wayland"]},
          "bridge": {"abi": 1, "dependency": "@rpath/libmetalsharp-gem-wine.0.dylib", "rpath": "@loader_path/../..", "linkage": "direct"},
          "dependencies": {"llvmMingw": str(llvm), "homebrewPrefix": str(brew), "externalRuntime": str(deps), "bison": "required", "freetype": "required+staged", "vulkan": "headers+loader+MoltenVK staged", "opengl": "macOS framework", "egl": "pkg-config/mesa+staged", "sdl2": "required+staged", "sdl3": "staged; Wine 11.12 consumes SDL2"},
          "toolchain": {"host": "aarch64-apple-darwin", "uname": text("uname.txt"), "clang": text("clang-version.txt"), "make": text("make-version.txt"), "sdk": text("sdk-version.txt")},
@@ -467,7 +482,7 @@ value = {"schema": 1, "kind": "wine-foundation", "repositoryCommit": repository_
                         "evidence": evidence_files,
                         "lifecycleLog": text("gem-lifecycle-probe.log"),
                         "hostMachOClosure": text("zero-rosetta-audit.txt")},
-         "build": {"jobs": int(jobs), "installRoot": "<external-stage>/wine", "files": files, "fileAudit": text("macho-files.txt")}}
+         "build": {"jobs": int(jobs), "installRoot": "<DESTDIR>/", "files": files, "fileAudit": text("macho-files.txt")}}
 manifest.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
 echo "Clean Wine foundation staged outside repository: $prefix"
