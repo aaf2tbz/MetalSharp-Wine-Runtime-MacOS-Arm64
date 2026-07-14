@@ -58,7 +58,7 @@ jobs:
         with:
           persist-credentials: false
       - run: test "$(uname -m)" = x86_64
-      - run: test "$(sysctl -in sysctl.proc_translated 2>/dev/null || echo 0)" = 0
+      - run: translated="$(sysctl -n sysctl.proc_translated 2>/dev/null || true)"; test "${translated:-0}" = 0
       - name: Fetch and verify the locked universal LLVM-MinGW toolchain
         env:
           LLVM_MINGW_RELEASE: "20260616"
