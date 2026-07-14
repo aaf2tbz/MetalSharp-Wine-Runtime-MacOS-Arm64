@@ -717,12 +717,10 @@ gem_memory_transaction_commit_pages(struct gem_memory_transaction *transaction,
                                    : GEM_PAGE_EXECUTE_READWRITE;
         } else if (page->backing->external &&
                    ((page->protection & ~(uint32_t)GEM_PAGE_GUARD) == GEM_PAGE_WRITECOPY ||
-                    (page->protection & ~(uint32_t)GEM_PAGE_GUARD) ==
-                        GEM_PAGE_EXECUTE_WRITECOPY)) {
-            page->protection =
-                (page->protection & ~(uint32_t)GEM_PAGE_GUARD) == GEM_PAGE_WRITECOPY
-                    ? GEM_PAGE_READWRITE
-                    : GEM_PAGE_EXECUTE_READWRITE;
+                    (page->protection & ~(uint32_t)GEM_PAGE_GUARD) == GEM_PAGE_EXECUTE_WRITECOPY)) {
+            page->protection = (page->protection & ~(uint32_t)GEM_PAGE_GUARD) == GEM_PAGE_WRITECOPY
+                                   ? GEM_PAGE_READWRITE
+                                   : GEM_PAGE_EXECUTE_READWRITE;
         }
         memcpy(page->backing->data, writes[i].data, 4096U);
     }
