@@ -246,7 +246,7 @@ jobs:
       - run: cmake --build build-x64 --parallel
       - run: ctest --test-dir build-x64 -R gem.x64_engine_conformance --output-on-failure
       - run: tools/ci/audit-zero-rosetta.sh build-x64
-      - run: grep -E '^#define HAVE_JIT 1$' build-x64/_deps/blink_gem-src/config.h
+      - run: grep -Fx '// #define DISABLE_JIT' build-x64/_deps/blink_gem-src/config.h
 
   arm64x-toolchain-probe:
     name: ARM64X toolchain probe (native Windows ARM64)
@@ -477,7 +477,7 @@ jobs:
           arch -arm64 ctest --test-dir build-roundtrip --output-on-failure
           -R 'gem.(arm64x_roundtrip|wine_arm64x_conformance|wine_bridge_conformance|arm64ec_engine_conformance|x64_engine_conformance|pe_arm64x_loader_test|context_conversion_test)'
       - run: tools/ci/audit-zero-rosetta.sh build-roundtrip
-      - run: grep -E '^#define HAVE_JIT 1$' build-roundtrip/_deps/blink_gem-src/config.h
+      - run: grep -Fx '// #define DISABLE_JIT' build-roundtrip/_deps/blink_gem-src/config.h
       - run: test -z "$(git status --porcelain --untracked-files=all)"
 
   x86_64-arm64-wine:
