@@ -48,6 +48,9 @@ for target in i686-w64-mingw32 x86_64-w64-mingw32 aarch64-w64-mingw32 arm64ec-w6
         echo "LLVM-MinGW is missing $target-clang" >&2; exit 1;
     }
 done
+[[ -x "$llvm_mingw/bin/llvm-objdump" ]] || {
+    echo "LLVM-MinGW is missing llvm-objdump" >&2; exit 1;
+}
 [[ -f "$llvm_mingw/LICENSE.TXT" ]] || { echo "LLVM-MinGW license is missing" >&2; exit 1; }
 for tool in "$llvm_mingw/bin/clang" "$llvm_mingw/bin/lld"; do
     file "$tool" | grep -Eq 'Mach-O.*arm64' || {
@@ -195,14 +198,46 @@ configure=("$source_dir/configure" "--host=aarch64-apple-darwin"
     make -j"$jobs" 2>&1 | tee "$work/build.log"
     make install DESTDIR="$stage" 2>&1 | tee "$work/install.log"
 )
+
+# The i386 ucrtbase delay imports are part of the WoW64 loader contract.  If
+# advapi32 or user32 becomes an eager import, process attachment can recurse
+# through secur32 into ucrtbase before its heap has been initialized.
+i386_ucrt="$prefix/lib/wine/i386-windows/ucrtbase.dll"
+i386_ucrt_imports="$work/i386-ucrt-imports.txt"
+[[ -f "$i386_ucrt" ]] || { echo "staged i386 ucrtbase.dll is missing" >&2; exit 1; }
+"$llvm_mingw/bin/llvm-objdump" -p "$i386_ucrt" | tee "$i386_ucrt_imports"
+python3 - "$i386_ucrt_imports" <<'PY'
+import pathlib
+import re
+import sys
+
+text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+imports = {name.lower() for name in re.findall(r"DLL Name:\s*([^\s]+)", text, re.I)}
+required = {"kernel32.dll", "ntdll.dll"}
+forbidden = {"advapi32.dll", "user32.dll"}
+missing = sorted(required - imports)
+eager = sorted(forbidden & imports)
+if missing or eager:
+    raise SystemExit(
+        f"invalid i386 ucrtbase eager imports: missing={missing}, forbidden={eager}, "
+        f"observed={sorted(imports)}"
+    )
+PY
 cmake --install "$gem_build" --prefix "$prefix" --component metalsharp-gem-wine
 runtime_dir="$prefix/lib/wine/aarch64-unix"
 acceptance_exe="$prefix/lib/wine/aarch64-windows/metalsharp-gem-acceptance.exe"
+i386_acceptance_exe="$prefix/lib/wine/i386-windows/metalsharp-gem-i386-acceptance.exe"
 "$llvm_mingw/bin/aarch64-w64-mingw32-clang" -O2 -Wall -Wextra -Werror \
     -Wl,--no-insert-timestamp -Wl,--subsystem,console \
     "$root/tests/fixtures/wine_arm64_gem_acceptance.c" -o "$acceptance_exe"
 file "$acceptance_exe" | grep -Eq 'PE32\+ executable.*Aarch64' || {
     echo "native ARM64 GEM acceptance executable has the wrong architecture" >&2; exit 1;
+}
+"$llvm_mingw/bin/i686-w64-mingw32-clang" -O2 -Wall -Wextra -Werror \
+    -Wl,--no-insert-timestamp -Wl,--subsystem,console \
+    "$root/tests/fixtures/wine_i386_gem_acceptance.c" -o "$i386_acceptance_exe"
+file "$i386_acceptance_exe" | grep -Eq 'PE32 executable.*Intel 80386' || {
+    echo "i386 GEM acceptance executable has the wrong architecture" >&2; exit 1;
 }
 install -m 755 "$deps_root/vulkan/libvulkan.dylib" "$runtime_dir/libvulkan.1.dylib"
 ln -sfn libvulkan.1.dylib "$runtime_dir/libvulkan.dylib"
@@ -265,6 +300,7 @@ PY
 acceptance_prefix="$work/acceptance-prefix"
 acceptance_dir="$work/acceptance-evidence"
 mkdir -p "$acceptance_dir"
+cp "$i386_ucrt_imports" "$acceptance_dir/i386-ucrt-imports.txt"
 python3 - "$prefix" "$acceptance_prefix" "$acceptance_dir" <<'PY'
 import ctypes
 import datetime
@@ -387,6 +423,10 @@ try:
     gem_acceptance_log = run(
         "gem-acceptance", [str(prefix / "bin/wine"), "metalsharp-gem-acceptance.exe"],
         120, trace_gem=True)
+    i386_acceptance_log = run(
+        "gem-i386-acceptance", [str(prefix / "bin/wine"),
+                                 str(prefix / "lib/wine/i386-windows/metalsharp-gem-i386-acceptance.exe")],
+        180, trace_gem=True)
     cmd_log = run("cmd", [str(prefix / "bin/wine"), "cmd.exe", "/c", "exit"], 60)
 finally:
     subprocess.run([str(prefix / "bin/wineserver"), "-k"], env=env,
@@ -397,7 +437,13 @@ if audit_failure:
     raise SystemExit("translated or non-ARM64 process detected:\n" + "\n".join(audit_failure))
 combined = wineboot_log.read_text(encoding="utf-8", errors="replace") + \
            gem_acceptance_log.read_text(encoding="utf-8", errors="replace") + \
+           i386_acceptance_log.read_text(encoding="utf-8", errors="replace") + \
            cmd_log.read_text(encoding="utf-8", errors="replace")
+marker = wineprefix / "drive_c/metalsharp-gem-i386-ok.txt"
+expected_marker = b"METALSHARP_GEM_I386_OK\r\n"
+if not marker.is_file() or marker.read_bytes() != expected_marker:
+    raise SystemExit("authentic PE32 GEM acceptance marker is missing or invalid")
+(evidence / "gem-i386-acceptance-marker.txt").write_bytes(marker.read_bytes())
 resolved_prefix = prefix.resolve(strict=True)
 required = ("gem_signal_run enter pc=", "boundary syscall", "boundary unix-call",
             "callback enter", "callback return",

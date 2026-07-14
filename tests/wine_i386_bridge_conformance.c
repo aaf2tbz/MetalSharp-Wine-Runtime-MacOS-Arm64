@@ -66,12 +66,15 @@ int main(void) {
     i386_config.struct_size = sizeof(i386_config);
     i386_config.loaded_base = IMAGE_BASE;
     i386_config.image_size = IMAGE_SIZE;
-    i386_config.windows_syscall_boundary = IMAGE_BASE + UINT32_C(0x300);
-    i386_config.unix_call_boundary = IMAGE_BASE + UINT32_C(0x400);
+    i386_config.windows_syscall_boundary = UINT32_C(0x7ffe1000);
+    i386_config.unix_call_boundary = UINT32_C(0x7ffe1010);
     i386_config.host_return_sentinel = HOST_RETURN;
     make_pe32(image, UINT16_C(0x8664));
     assert(gem_wine_process_prepare_i386(process, &i386_config) == GEM_WINE_INVALID_ARGUMENT);
     make_pe32(image, UINT16_C(0x014c));
+    i386_config.unix_call_boundary = i386_config.windows_syscall_boundary;
+    assert(gem_wine_process_prepare_i386(process, &i386_config) == GEM_WINE_INVALID_ARGUMENT);
+    i386_config.unix_call_boundary = UINT32_C(0x7ffe1010);
     assert(gem_wine_process_prepare_i386(process, &i386_config) == GEM_WINE_OK);
     assert(gem_wine_process_prepare_i386(process, &i386_config) == GEM_WINE_OK);
     assert(gem_wine_process_reserve(process, UINT64_C(0x100000000), GEM_WINE_GUEST_PAGE_SIZE) ==

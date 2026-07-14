@@ -53,7 +53,7 @@ The embedding API consists only of `blink_gem_machine_create`, `blink_gem_machin
 `docs/architecture/adr/0008-blink-embedding.provenance.json` and `LICENSES/Blink-ISC.txt`.
 
 `0003-gem-i386-legacy-mode.patch` (SHA-256
-`06ee0d41ffe7ca89dbb1579cd58bcad99dd20bd4d5e256cf8b8efda468e046f2`)
+`50499a434838be5620fb86d4a6e214e6a9545eeac0dd059b1f56385a78b6cbeb`)
 adds an explicit legacy-32 decoder/executor mode without changing the accepted long-mode default.
 It binds FS-based TEB and x87 state, rejects addresses outside `[0, 2^32)`, and keeps Blink's
 reviewed long-mode page-table system underneath the adapter because Blink's virtual-memory helper

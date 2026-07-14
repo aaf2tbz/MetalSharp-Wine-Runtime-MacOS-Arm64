@@ -127,3 +127,163 @@ diff --git a/blink/gem_embed.h b/blink/gem_embed.h
  };
  struct blink_gem_result {
    enum blink_gem_outcome outcome;
+diff --git a/blink/machine.h b/blink/machine.h
+--- a/blink/machine.h
++++ b/blink/machine.h
+@@ -573,13 +573,18 @@ void HandleFatalSystemSignal(struct Machine *, const siginfo_t *);
+
+ void CountOp(long *);
+ void FastPush(struct Machine *, long);
++void FastPush32(struct Machine *, long);
+ void FastPop(struct Machine *, long);
++void FastPop32(struct Machine *, long);
+ void FastCall(struct Machine *, u64);
++void FastCall32(struct Machine *, u64);
+ void FastCallAbs(u64, struct Machine *);
++void FastCallAbs32(u64, struct Machine *);
+ void FastJmp(struct Machine *, u64);
+ void FastJmpAbs(u64, struct Machine *);
+ void FastLeave(struct Machine *);
+ i64 PredictRet(struct Machine *, i64);
++i64 PredictRet32(struct Machine *, i64);
+
+ typedef void (*putreg64_f)(u64, struct Machine *);
+ extern const putreg64_f kPutReg64[16];
+diff --git a/blink/uop.c b/blink/uop.c
+--- a/blink/uop.c
++++ b/blink/uop.c
+@@ -1419,12 +1419,24 @@ MICRO_OP void FastPush(struct Machine *m, long rexbsrm) {
+   Write64(ToHost(v), x);
+ }
+
++MICRO_OP void FastPush32(struct Machine *m, long rexbsrm) {
++  u32 v, x = Get32(m->weg[rexbsrm]);
++  Put64(m->sp, (v = Get32(m->sp) - 4));
++  Write32(ToHost(v), x);
++}
++
+ MICRO_OP void FastPop(struct Machine *m, long rexbsrm) {
+   u64 v = Get64(m->sp);
+   Put64(m->sp, v + 8);
+   Put64(m->weg[rexbsrm], Read64(ToHost(v)));
+ }
+
++MICRO_OP void FastPop32(struct Machine *m, long rexbsrm) {
++  u32 v = Get32(m->sp);
++  Put64(m->sp, v + 4);
++  Put64(m->weg[rexbsrm], Read32(ToHost(v)));
++}
++
+ MICRO_OP void FastCall(struct Machine *m, u64 disp) {
+   u64 v, x = m->ip + disp;
+   Put64(m->sp, (v = Get64(m->sp) - 8));
+@@ -1432,13 +1444,27 @@ MICRO_OP void FastCall(struct Machine *m, u64 disp) {
+   m->ip = x;
+ }
+
++MICRO_OP void FastCall32(struct Machine *m, u64 disp) {
++  u32 v, x = m->ip + disp;
++  Put64(m->sp, (v = Get32(m->sp) - 4));
++  Write32(ToHost(v), m->ip);
++  m->ip = x;
++}
++
+ MICRO_OP void FastCallAbs(u64 x, struct Machine *m) {
+   u64 v;
+   Put64(m->sp, (v = Get64(m->sp) - 8));
+   Write64(ToHost(v), m->ip);
+   m->ip = x;
+ }
+
++MICRO_OP void FastCallAbs32(u64 x, struct Machine *m) {
++  u32 v;
++  Put64(m->sp, (v = Get32(m->sp) - 4));
++  Write32(ToHost(v), m->ip);
++  m->ip = (u32)x;
++}
++
+ MICRO_OP void FastLeave(struct Machine *m) {
+   u64 v = Get64(m->bp);
+   Put64(m->sp, v + 8);
+@@ -1458,6 +1492,13 @@ MICRO_OP i64 PredictRet(struct Machine *m, i64 prediction) {
+   return m->ip ^ prediction;
+ }
+
++MICRO_OP i64 PredictRet32(struct Machine *m, i64 prediction) {
++  u32 v = Get32(m->sp);
++  Put64(m->sp, v + 4);
++  m->ip = Read32(ToHost(v));
++  return m->ip ^ (u32)prediction;
++}
++
+ ////////////////////////////////////////////////////////////////////////////////
+ // SIGN EXTENDING
+
+diff --git a/blink/stack.c b/blink/stack.c
+--- a/blink/stack.c
++++ b/blink/stack.c
+@@ -120,6 +120,7 @@ void OpPushZvq(P) {
+            "a1i"
+            "m",
+-           RexbSrm(rde), FastPush);
++           RexbSrm(rde),
++           Mode(rde) == XED_MODE_LEGACY ? FastPush32 : FastPush);
+   }
+ }
+
+@@ -174,6 +175,7 @@ void OpPopZvq(P) {
+            "a1i"
+            "m",
+-           RexbSrm(rde), FastPop);
++           RexbSrm(rde),
++           Mode(rde) == XED_MODE_LEGACY ? FastPop32 : FastPop);
+   }
+ }
+
+@@ -184,6 +186,6 @@ void OpCallJvds(P) {
+   OpCall(A, m->ip + disp);
+   if (HasLinearMapping() && IsMakingPath(m)) {
+-    Terminate(A, FastCall);
++    Terminate(A, Mode(rde) == XED_MODE_LEGACY ? FastCall32 : FastCall);
+   }
+ }
+
+@@ -200,7 +202,7 @@ void OpCallEq(P) {
+            "s0a1="  // arg1 = machine
+            "t"      // arg0 = res0
+            "m",     // call micro-op (FastCallAbs)
+-           FastCallAbs);
++           Mode(rde) == XED_MODE_LEGACY ? FastCallAbs32 : FastCallAbs);
+   }
+   OpCall(A, LoadAddressFromMemory(A));
+ }
+@@ -272,6 +274,7 @@ void OpRet(P) {
+            "m"    // call micro-op (PredictRet)
+            "q",   // arg0 = machine
+-           m->ip, PredictRet);
++           m->ip,
++           Mode(rde) == XED_MODE_LEGACY ? PredictRet32 : PredictRet);
+     AlignJit(m->path.jb, 8, 3);
+     u8 code[] = {
+         0x48, 0x85, 0300 | kJitRes0 << 3 | kJitRes0,  // test %rax,%rax
+@@ -284,6 +287,7 @@ void OpRet(P) {
+            "r0a2="  // arg2 = res0
+            "q",     // arg0 = machine
+-           m->ip, PredictRet);
++           m->ip,
++           Mode(rde) == XED_MODE_LEGACY ? PredictRet32 : PredictRet);
+     u32 code[] = {
+         0xb5000000 | (8 / 4) << 5 | kJitArg2,  // cbnz x2,#8
+     };
+diff --git a/blink/ssefloat.c b/blink/ssefloat.c
+--- a/blink/ssefloat.c
++++ b/blink/ssefloat.c
+@@ -122,7 +122,7 @@ void OpPextrwGdqpUdqIb(P) {
+   u8 i;
+   i = uimm0;
+   i &= Osz(rde) ? 7 : 3;
+-  Put16(RegRexrReg(m, rde), Get16(XmmRexbRm(m, rde) + i * 2));
++  Put64(RegRexrReg(m, rde), Get16(XmmRexbRm(m, rde) + i * 2));
+ }
+
+ void OpPinsrwVdqEwIb(P) {

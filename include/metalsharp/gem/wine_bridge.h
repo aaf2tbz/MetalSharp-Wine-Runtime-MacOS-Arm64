@@ -149,9 +149,10 @@ struct gem_wine_x86_64_config {
     uint64_t reserved[3];
 };
 
-/* Exact publication for an already-relocated i386 ntdll PE32 image. Every
- * address is intrinsically 32-bit and is revalidated against the mapped image
- * before GEM_i386 routing is enabled. */
+/* Exact publication for an already-relocated i386 ntdll PE32 image. The image
+ * range is independently validated as PE32/i386. The two nonzero, distinct
+ * boundary addresses are exact Wine CPU-backend opcodes and may be synthetic
+ * guest addresses outside ntdll; all addresses remain intrinsically 32-bit. */
 struct gem_wine_i386_config {
     uint32_t version;
     uint32_t struct_size;

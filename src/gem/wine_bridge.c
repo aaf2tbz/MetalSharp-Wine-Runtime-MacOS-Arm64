@@ -154,11 +154,8 @@ static bool validate_i386_ntdll(struct gem_wine_process *process,
         (config->loaded_base & (uint32_t)(GEM_WINE_GUEST_PAGE_SIZE - 1U)) != 0U ||
         config->image_size < GEM_WINE_GUEST_PAGE_SIZE ||
         (config->image_size & (uint32_t)(GEM_WINE_GUEST_PAGE_SIZE - 1U)) != 0U ||
-        image_end > UINT64_C(0x100000000) ||
-        config->windows_syscall_boundary < config->loaded_base ||
-        config->windows_syscall_boundary >= image_end ||
-        config->unix_call_boundary < config->loaded_base ||
-        config->unix_call_boundary >= image_end ||
+        image_end > UINT64_C(0x100000000) || config->windows_syscall_boundary == 0U ||
+        config->unix_call_boundary == 0U ||
         config->windows_syscall_boundary == config->unix_call_boundary ||
         config->host_return_sentinel == 0U ||
         config->host_return_sentinel == config->windows_syscall_boundary ||
