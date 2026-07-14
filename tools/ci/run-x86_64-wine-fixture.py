@@ -27,25 +27,23 @@ def main() -> None:
     parser.add_argument("--wine", required=True, type=pathlib.Path)
     parser.add_argument("--wineserver", type=pathlib.Path)
     parser.add_argument("--fixture", required=True, type=pathlib.Path)
-    parser.add_argument("--mode", required=True, choices=("intel-native", "jit", "interpreter"))
+    parser.add_argument("--mode", required=True, choices=("jit", "interpreter"))
     parser.add_argument("--output", required=True, type=pathlib.Path)
     parser.add_argument("--timeout", type=int, default=120)
     args = parser.parse_args()
     if args.timeout < 10 or args.timeout > 300:
         fail("timeout is outside the accepted bound")
     host = platform.machine().lower()
-    expected_host = "x86_64" if args.mode == "intel-native" else "arm64"
-    if host != expected_host:
-        fail(f"{args.mode} requires {expected_host}, observed {host}")
+    if host != "arm64":
+        fail(f"{args.mode} requires arm64, observed {host}")
     prefix = pathlib.Path(tempfile.mkdtemp(prefix=f"mswr-x64-{args.mode}-"))
     env = os.environ.copy()
     env.update({"WINEPREFIX": str(prefix),
-                "WINEDEBUG": "-all,+process" if args.mode == "intel-native" else "+gem,-all",
+                "WINEDEBUG": "+gem,-all",
                 "WINEDLLOVERRIDES": "winemenubuilder.exe=d;explorer.exe=d",
                 "MVK_CONFIG_LOG_LEVEL": "0",
                 "MSWR_X64_ENV": "oracle-value", "LC_ALL": "C", "LANG": "C"})
-    if args.mode != "intel-native":
-        env["METALSHARP_GEM_X64_ENGINE"] = args.mode
+    env["METALSHARP_GEM_X64_ENGINE"] = args.mode
     started = time.monotonic()
     timed_out = False
     with tempfile.TemporaryFile() as log:
@@ -74,8 +72,8 @@ def main() -> None:
     semantic = json.loads(lines[0][len(MARKER):])
     if semantic.get("passed") is not True:
         fail(f"semantic fixture failure: {semantic}")
-    required_trace = None if args.mode == "intel-native" else f"x64-engine={args.mode} host=aarch64"
-    if required_trace and required_trace not in output:
+    required_trace = f"x64-engine={args.mode} host=aarch64"
+    if required_trace not in output:
         fail(f"selected engine was not evidenced: {required_trace}")
     evidence = {"schema": 1, "mode": args.mode, "hostArchitecture": host,
                 "fixtureSha256": hashlib.sha256(args.fixture.read_bytes()).hexdigest(),
