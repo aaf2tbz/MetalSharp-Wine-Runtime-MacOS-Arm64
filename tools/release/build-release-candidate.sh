@@ -46,7 +46,9 @@ cmake -S "$root" -B "$sanitizer" -DCMAKE_BUILD_TYPE=Debug \
     -DCMAKE_EXE_LINKER_FLAGS='-fsanitize=address,undefined' \
     -DCMAKE_SHARED_LINKER_FLAGS='-fsanitize=address,undefined' \
     -DMSWR_ENABLE_ARM64EC_ENGINE=ON -DMSWR_ENABLE_X64_ENGINE=ON \
+    -DMSWR_ENABLE_I386_ENGINE=ON \
     -DMSWR_ENGINE_CONFORMANCE=ON -DMSWR_X64_ENGINE_CONFORMANCE=ON \
+    -DMSWR_I386_ENGINE_CONFORMANCE=ON \
     -DMSWR_BUILD_WINE_BRIDGE=ON -DMSWR_WINE_BRIDGE_CONFORMANCE=ON \
     -DMSWR_WARNINGS_AS_ERRORS=ON -DBUILD_TESTING=ON
 cmake --build "$sanitizer" --parallel "$jobs"
@@ -59,10 +61,13 @@ ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1:print_
 leakcheck="$work/leakcheck"
 cmake -S "$root" -B "$leakcheck" -DCMAKE_BUILD_TYPE=Debug \
     -DMSWR_ENABLE_X64_ENGINE=ON -DMSWR_X64_ENGINE_CONFORMANCE=ON \
+    -DMSWR_ENABLE_I386_ENGINE=ON -DMSWR_I386_ENGINE_CONFORMANCE=ON \
     -DMSWR_WARNINGS_AS_ERRORS=ON -DBUILD_TESTING=ON
-cmake --build "$leakcheck" --target x64_engine_conformance --parallel "$jobs"
-/usr/bin/leaks --atExit -- "$leakcheck/x64_engine_conformance" 2>&1 | tee "$work/apple-leaks.log"
-grep -F '0 leaks for 0 total leaked bytes' "$work/apple-leaks.log" >/dev/null
+cmake --build "$leakcheck" --target x64_engine_conformance i386_engine_conformance --parallel "$jobs"
+/usr/bin/leaks --atExit -- "$leakcheck/x64_engine_conformance" 2>&1 | tee "$work/apple-x64-leaks.log"
+grep -F '0 leaks for 0 total leaked bytes' "$work/apple-x64-leaks.log" >/dev/null
+/usr/bin/leaks --atExit -- "$leakcheck/i386_engine_conformance" 2>&1 | tee "$work/apple-i386-leaks.log"
+grep -F '0 leaks for 0 total leaked bytes' "$work/apple-i386-leaks.log" >/dev/null
 
 foundation_a="$work/foundation-a"
 foundation_b="$work/foundation-b"

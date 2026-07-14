@@ -146,6 +146,7 @@ cmake -S "$root" -B "$gem_build" -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET" \
     -DCMAKE_INSTALL_PREFIX="$gem_prefix" \
     -DMSWR_ENABLE_ARM64EC_ENGINE=ON -DMSWR_ENABLE_X64_ENGINE=ON \
+    -DMSWR_ENABLE_I386_ENGINE=ON \
     -DMSWR_BUILD_WINE_BRIDGE=ON \
     -DMSWR_WARNINGS_AS_ERRORS=ON
 cmake --build "$gem_build" --parallel "$jobs" --target metalsharp_gem_wine
