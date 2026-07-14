@@ -20,7 +20,7 @@ GEM also owns guest virtual-memory semantics, page-protection transitions, excep
 
 ## Blink integration
 
-Blink is the pinned x86_64 guest interpreter used for the supported ARM64EC/x64 transition path. The release uses Blink's interpreter mode with JIT disabled: correctness, deterministic state transfer, fault handling, and traceability take priority over speculative host-code generation.
+Blink is the pinned x86_64 guest engine used for the supported ARM64EC/x64 transition path. Production `GEM_x86_64` uses Blink's native AArch64 JIT with one guest instruction per checked transaction; the interpreter remains an explicit CI oracle. Both modes use the same reviewed decoder-handler allowlist, canonical state transfer, transactional memory callbacks, and fault boundary.
 
 ARM64EC transitions are classified from copied, bounds-checked ARM64X/CHPE metadata. GEM converts canonical register, stack, SIMD, flags, and TEB state between the ARM64EC and Blink views; it does not guess target architecture from instruction bytes or rely on Darwin register conventions.
 
