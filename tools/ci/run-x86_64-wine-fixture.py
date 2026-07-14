@@ -39,7 +39,9 @@ def main() -> None:
         fail(f"{args.mode} requires {expected_host}, observed {host}")
     prefix = pathlib.Path(tempfile.mkdtemp(prefix=f"mswr-x64-{args.mode}-"))
     env = os.environ.copy()
-    env.update({"WINEPREFIX": str(prefix), "WINEDEBUG": "+gem,-all",
+    env.update({"WINEPREFIX": str(prefix),
+                "WINEDEBUG": "-all" if args.mode == "intel-native" else "+gem,-all",
+                "WINEDLLOVERRIDES": "winemenubuilder.exe=d", "MVK_CONFIG_LOG_LEVEL": "0",
                 "MSWR_X64_ENV": "oracle-value", "LC_ALL": "C", "LANG": "C"})
     if args.mode != "intel-native":
         env["METALSHARP_GEM_X64_ENGINE"] = args.mode
