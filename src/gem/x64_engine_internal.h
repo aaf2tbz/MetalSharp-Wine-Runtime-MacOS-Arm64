@@ -4,6 +4,7 @@
 #include "memory_internal.h"
 #include "metalsharp/gem/context_conversion.h"
 #include "metalsharp/gem/x64_engine.h"
+#include <stdatomic.h>
 struct gem_x64_runtime {
     struct gem_memory *memory;
     struct gem_x64_runtime_config config;
@@ -11,6 +12,7 @@ struct gem_x64_runtime {
     void *backend;
     struct gem_memory_transaction *transaction;
     bool running;
+    _Atomic bool async_stop_requested;
     bool last_instruction_was_call;
     bool last_instruction_was_ret;
 };

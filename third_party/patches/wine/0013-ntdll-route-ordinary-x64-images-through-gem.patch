@@ -1,0 +1,175 @@
+From 4003c3236586e61d421dc16749ebd7295ef39c54 Mon Sep 17 00:00:00 2001
+From: MetalSharp Wine Runtime contributors <noreply@metalsharp.local>
+Date: Mon, 13 Jul 2026 18:13:01 -0600
+Subject: [PATCH] ntdll: route ordinary x64 images through GEM
+
+---
+ dlls/ntdll/loader.c            |  4 ++++
+ dlls/ntdll/ntdll_misc.h        |  1 +
+ dlls/ntdll/signal_arm64ec.c    | 16 ++++++++++++++++
+ dlls/ntdll/unix/gem.c          | 21 +++++++++++++++++++++
+ dlls/ntdll/unix/loader.c       |  2 ++
+ dlls/ntdll/unix/unix_private.h |  1 +
+ dlls/ntdll/unixlib.h           |  7 +++++++
+ 7 files changed, 52 insertions(+)
+
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index a595a539c1..f366500120 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -2155,6 +2155,10 @@ static void update_load_config( void *module )
+     IMAGE_LOAD_CONFIG_DIRECTORY *cfg;
+     ULONG size;
+ 
++#ifdef __arm64ec__
++    arm64ec_register_x64_image( module, nt );
++#endif
++
+     cfg = RtlImageDirectoryEntryToData( module, TRUE, IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG, &size );
+     if (!cfg) return;
+     size = min( size, cfg->Size );
+diff --git a/dlls/ntdll/ntdll_misc.h b/dlls/ntdll/ntdll_misc.h
+index bee5c10846..baab702051 100644
+--- a/dlls/ntdll/ntdll_misc.h
++++ b/dlls/ntdll/ntdll_misc.h
+@@ -168,6 +168,7 @@ extern IMAGE_ARM64EC_METADATA *arm64ec_get_module_metadata( HMODULE module );
+ extern void arm64ec_update_hybrid_metadata( void *module, IMAGE_NT_HEADERS *nt,
+                                             const IMAGE_ARM64EC_METADATA *metadata,
+                                             BOOL defer_routing );
++extern void arm64ec_register_x64_image( void *module, IMAGE_NT_HEADERS *nt );
+ extern void invoke_arm64ec_syscall(void);
+ 
+ extern void *__os_arm64x_check_call;
+diff --git a/dlls/ntdll/signal_arm64ec.c b/dlls/ntdll/signal_arm64ec.c
+index 3f2792df19..3edbdab134 100644
+--- a/dlls/ntdll/signal_arm64ec.c
++++ b/dlls/ntdll/signal_arm64ec.c
+@@ -365,6 +365,22 @@ void arm64ec_update_hybrid_metadata( void *module, IMAGE_NT_HEADERS *nt,
+     ERR( "module %p no section found for %lx\n", module, metadata->__os_arm64x_dispatch_call );
+ }
+ 
++void arm64ec_register_x64_image( void *module, IMAGE_NT_HEADERS *nt )
++{
++    struct gem_register_x64_params params;
++    NTSTATUS status;
++
++    if (!module || !nt || nt->FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64 ||
++        arm64ec_get_module_metadata( module )) return;
++    params.module = module;
++    params.image_size = nt->OptionalHeader.SizeOfImage;
++    if ((status = WINE_UNIX_CALL( unix_gem_register_x64, &params )))
++    {
++        ERR( "failed to register ordinary x64 module %p, status %lx\n", module, status );
++        NtTerminateProcess( NtCurrentProcess(), status );
++    }
++}
++
+ 
+ /*******************************************************************
+  *         syscalls
+diff --git a/dlls/ntdll/unix/gem.c b/dlls/ntdll/unix/gem.c
+index f1d4db4d9f..b09dd486ca 100644
+--- a/dlls/ntdll/unix/gem.c
++++ b/dlls/ntdll/unix/gem.c
+@@ -103,6 +103,7 @@ void gem_process_init(void)
+     config.max_boundary_callbacks = 4096;
+     config.host_return_sentinel = UINT64_MAX - 15;
+     config.unix_call_dispatcher = (uint64_t)(uintptr_t)__wine_unix_call_dispatcher;
++    config.x64_engine_mode = GEM_WINE_X64_JIT;
+     if ((status = gem_wine_process_create(&config, &gem_process)) != GEM_WINE_OK)
+         gem_fail("process create", status);
+     TRACE("process created ABI=%u\n", GEM_WINE_BRIDGE_ABI_VERSION);
+@@ -319,6 +320,25 @@ NTSTATUS gem_register_arm64x(void *args)
+     return gem_status(status);
+ }
+ 
++NTSTATUS gem_register_x64(void *args)
++{
++    const struct gem_register_x64_params *params = args;
++    struct gem_wine_x64_image_config config = {0};
++    enum gem_wine_status status;
++
++    if (!gem_process || !params || !params->module || !params->image_size)
++        return STATUS_INVALID_PARAMETER;
++    config.version = GEM_WINE_X64_IMAGE_CONFIG_VERSION;
++    config.struct_size = sizeof(config);
++    config.loaded_base = (uint64_t)(uintptr_t)params->module;
++    config.image_size = params->image_size;
++    status = gem_wine_process_register_x64_mapped(gem_process, &config);
++    if (status == GEM_WINE_OK)
++        TRACE("registered ordinary x64 module=%p size=%lx\n", params->module,
++              params->image_size);
++    return gem_status(status);
++}
++
+ BOOL gem_lifecycle_probe(void)
+ {
+     const char *requested = getenv("METALSHARP_GEM_LIFECYCLE_PROBE");
+@@ -385,6 +405,7 @@ NTSTATUS gem_virtual_map_metadata(void *base, SIZE_T size, ULONG protection)
+ void gem_virtual_bind_kuser(void *host_page) {}
+ NTSTATUS gem_virtual_invalidate(const void *base, SIZE_T size) { return STATUS_SUCCESS; }
+ NTSTATUS gem_register_arm64x(void *args) { return STATUS_SUCCESS; }
++NTSTATUS gem_register_x64(void *args) { return STATUS_SUCCESS; }
+ BOOL gem_lifecycle_probe(void) { return FALSE; }
+ 
+ #endif
+diff --git a/dlls/ntdll/unix/loader.c b/dlls/ntdll/unix/loader.c
+index 3ead201c6f..f284c9da71 100644
+--- a/dlls/ntdll/unix/loader.c
++++ b/dlls/ntdll/unix/loader.c
+@@ -1017,6 +1017,7 @@ static const unixlib_entry_t unix_call_funcs[] =
+     unixcall_wine_spawnvp,
+     system_time_precise,
+     gem_register_arm64x,
++    gem_register_x64,
+ };
+ 
+ 
+@@ -1036,6 +1037,7 @@ const unixlib_entry_t unix_call_wow64_funcs[] =
+     wow64_wine_spawnvp,
+     system_time_precise,
+     gem_register_arm64x,
++    gem_register_x64,
+ };
+ 
+ #endif  /* _WIN64 */
+diff --git a/dlls/ntdll/unix/unix_private.h b/dlls/ntdll/unix/unix_private.h
+index 28ea6a3b71..008a1bb8aa 100644
+--- a/dlls/ntdll/unix/unix_private.h
++++ b/dlls/ntdll/unix/unix_private.h
+@@ -315,6 +315,7 @@ extern NTSTATUS gem_virtual_map_metadata( void *base, SIZE_T size, ULONG protect
+ extern void gem_virtual_bind_kuser( void *host_page );
+ extern NTSTATUS gem_virtual_invalidate( const void *base, SIZE_T size );
+ extern NTSTATUS gem_register_arm64x( void *args );
++extern NTSTATUS gem_register_x64( void *args );
+ extern BOOL gem_lifecycle_probe(void);
+ extern ULONG_PTR get_system_affinity_mask(void);
+ extern UINT_PTR get_host_page_size(void);
+diff --git a/dlls/ntdll/unixlib.h b/dlls/ntdll/unixlib.h
+index e1ee75af8d..b96e150569 100644
+--- a/dlls/ntdll/unixlib.h
++++ b/dlls/ntdll/unixlib.h
+@@ -77,6 +77,12 @@ struct gem_register_arm64x_params
+     ULONG   flags;
+ };
+ 
++struct gem_register_x64_params
++{
++    void   *module;
++    SIZE_T  image_size;
++};
++
+ #define GEM_REGISTER_ARM64X_DEFER_ROUTING 0x00000001
+ 
+ enum ntdll_unix_funcs
+@@ -90,6 +96,7 @@ enum ntdll_unix_funcs
+     unix_wine_spawnvp,
+     unix_system_time_precise,
+     unix_gem_register_arm64x,
++    unix_gem_register_x64,
+ };
+ 
+ extern unixlib_handle_t __wine_unixlib_handle;
+-- 
+2.54.0 (Apple Git-157)
+

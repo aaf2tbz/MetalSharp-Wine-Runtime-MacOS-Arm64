@@ -62,6 +62,8 @@ bool gem_x64_runtime_last_instruction_was_ret(const struct gem_x64_runtime *);
 /* Invalidates translated code and Blink's instruction cache for the supplied
  * canonical, non-empty guest range. Invalid ranges fail closed as a no-op. */
 void gem_x64_runtime_invalidate_code(struct gem_x64_runtime *, uint64_t, uint64_t);
+/* Async-signal-safe. The request is consumed at the next instruction boundary. */
+void gem_x64_runtime_request_async_stop(struct gem_x64_runtime *);
 bool gem_x64_runtime_jit_info(const struct gem_x64_runtime *, struct gem_x64_jit_info *);
 const char *gem_x64_runtime_engine_name(const struct gem_x64_runtime *);
 const char *gem_x64_runtime_engine_version(const struct gem_x64_runtime *);

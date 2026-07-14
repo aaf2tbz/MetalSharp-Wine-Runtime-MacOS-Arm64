@@ -11,6 +11,7 @@ struct gem_x64_runtime *gem_x64_runtime_create(struct gem_memory *m,
     if (!r)
         return 0;
     r->memory = m;
+    atomic_init(&r->async_stop_requested, false);
     if (c)
         r->config = *c;
     if (r->config.reserved ||
@@ -60,6 +61,10 @@ enum gem_stop_reason gem_x64_runtime_run(struct gem_x64_runtime *r, struct gem_t
     r->running = true;
     while (retired < budget) {
         uint32_t one = 0;
+        if (atomic_exchange_explicit(&r->async_stop_requested, false, memory_order_acq_rel)) {
+            reason = GEM_STOP_ASYNC_REQUEST;
+            break;
+        }
         r->transaction = gem_memory_transaction_begin(r->memory);
         if (!r->transaction) {
             reason = GEM_STOP_INVARIANT_VIOLATION;
@@ -105,6 +110,10 @@ bool gem_x64_runtime_last_instruction_was_ret(const struct gem_x64_runtime *r) {
 void gem_x64_runtime_invalidate_code(struct gem_x64_runtime *r, uint64_t a, uint64_t s) {
     if (r && !r->running)
         (void)gem_x64_blink_invalidate_code(r, a, s);
+}
+void gem_x64_runtime_request_async_stop(struct gem_x64_runtime *r) {
+    if (r)
+        atomic_store_explicit(&r->async_stop_requested, true, memory_order_release);
 }
 bool gem_x64_runtime_jit_info(const struct gem_x64_runtime *r, struct gem_x64_jit_info *o) {
     return gem_x64_blink_jit_info(r, o);

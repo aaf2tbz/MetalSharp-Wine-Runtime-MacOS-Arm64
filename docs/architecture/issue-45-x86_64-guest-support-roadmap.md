@@ -75,7 +75,7 @@ extend their explicit interfaces and keep their existing tests green.
 
 ### Phase 3 — route ordinary x86_64 Wine guests
 
-- [ ] Extend the pinned Wine patch series through reviewed public bridge APIs
+- [x] Extend the pinned Wine patch series through reviewed public bridge APIs
       so ordinary PE32+ x86_64 images enter `GEM_x86_64`, not only the accepted
       ARM64EC thunk fixture.
 - [ ] Preserve Wine loader, wineserver, TEB/PEB, TLS, callback, exception,

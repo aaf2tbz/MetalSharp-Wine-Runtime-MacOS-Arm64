@@ -5,6 +5,7 @@
 #include "metalsharp/gem/arm64ec_target.h"
 #include "metalsharp/gem/hybrid_runtime.h"
 #include "metalsharp/gem/pe_arm64x.h"
+#include "metalsharp/gem/x64_engine.h"
 
 #include <pthread.h>
 #include <stdatomic.h>
@@ -40,6 +41,19 @@ struct gem_wine_arm64x_image {
     uint64_t loaded_end;
 };
 
+struct gem_wine_x64_range {
+    uint64_t start;
+    uint64_t end;
+};
+
+struct gem_wine_x64_image {
+    struct gem_wine_x64_image *next;
+    struct gem_wine_x64_image_config config;
+    struct gem_wine_x64_range *executable;
+    size_t executable_count;
+    uint64_t loaded_end;
+};
+
 struct gem_wine_hybrid_binding {
     struct gem_wine_hybrid_binding *next;
     const struct gem_wine_arm64x_image *image;
@@ -50,6 +64,7 @@ struct gem_wine_thread {
     struct gem_wine_process *process;
     struct gem_wine_thread *next;
     struct gem_arm64ec_runtime *runtime;
+    struct gem_x64_runtime *x64_runtime;
     struct gem_wine_hybrid_binding *hybrids;
     struct gem_wine_hybrid_binding *coordinator_hybrid;
     _Atomic(struct gem_hybrid_runtime *) active_hybrid;
@@ -63,6 +78,7 @@ struct gem_wine_process {
     struct gem_wine_process_config config;
     struct gem_wine_thread *threads;
     struct gem_wine_arm64x_image *images;
+    struct gem_wine_x64_image *x64_images;
     _Atomic bool arm64x_routing_enabled;
     pthread_mutex_t threads_lock;
     pthread_mutex_t images_lock;
@@ -80,6 +96,13 @@ static void destroy_arm64x_image(struct gem_wine_arm64x_image *image) {
     if (image != NULL) {
         gem_arm64ec_target_map_destroy(image->map);
         gem_pe_arm64x_image_destroy(image->metadata);
+        free(image);
+    }
+}
+
+static void destroy_x64_image(struct gem_wine_x64_image *image) {
+    if (image != NULL) {
+        free(image->executable);
         free(image);
     }
 }
@@ -119,6 +142,31 @@ process_target_resolve(void *opaque, uint64_t requested_va,
     for (image = process->images; image != NULL; image = image->next) {
         if (requested_va >= image->config.loaded_base && requested_va < image->loaded_end) {
             status = gem_arm64ec_target_resolve(image->map, requested_va, out_result);
+            break;
+        }
+    }
+    if (status == GEM_ARM64EC_TARGET_OUTSIDE_IMAGE) {
+        const struct gem_wine_x64_image *x64_image;
+        for (x64_image = process->x64_images; x64_image != NULL; x64_image = x64_image->next) {
+            size_t index;
+            if (requested_va < x64_image->config.loaded_base ||
+                requested_va >= x64_image->loaded_end)
+                continue;
+            status = GEM_ARM64EC_TARGET_NOT_EXECUTABLE;
+            for (index = 0; index < x64_image->executable_count; ++index) {
+                if (requested_va >= x64_image->executable[index].start &&
+                    requested_va < x64_image->executable[index].end) {
+                    memset(out_result, 0, sizeof(*out_result));
+                    out_result->requested_va = requested_va;
+                    out_result->resolved_va = requested_va;
+                    out_result->requested_rva =
+                        (uint32_t)(requested_va - x64_image->config.loaded_base);
+                    out_result->resolved_rva = out_result->requested_rva;
+                    out_result->kind = GEM_ARM64EC_TARGET_X64_BOUNDARY;
+                    status = GEM_ARM64EC_TARGET_OK;
+                    break;
+                }
+            }
             break;
         }
     }
@@ -220,6 +268,17 @@ static void copy_stop_info(struct gem_wine_stop_info *destination,
     destination->fault_address = source->fault_address;
 }
 
+static void copy_x64_stop_info(struct gem_wine_stop_info *destination,
+                               const struct gem_x64_stop_info *source) {
+    memset(destination, 0, sizeof(*destination));
+    destination->reason = (uint32_t)source->reason;
+    destination->access = (uint32_t)source->access;
+    destination->memory_error = source->memory_error;
+    destination->engine_status = source->engine_status;
+    destination->instructions_retired = source->instructions_retired;
+    destination->fault_address = source->fault_address;
+}
+
 static bool copy_hybrid_stop_info(struct gem_wine_stop_info *destination,
                                   const struct gem_hybrid_stop_info *source,
                                   uint64_t instructions_retired) {
@@ -278,7 +337,10 @@ enum gem_wine_status gem_wine_process_create(const struct gem_wine_process_confi
         config->struct_size != sizeof(*config) || config->segment_instruction_budget == 0U ||
         config->total_instruction_budget < config->segment_instruction_budget ||
         config->max_boundary_callbacks == 0U || config->host_return_sentinel == 0U ||
-        config->host_return_sentinel == config->unix_call_dispatcher ||
+        config->host_return_sentinel == config->unix_call_dispatcher || config->reserved0 != 0U ||
+        (config->x64_engine_mode != GEM_WINE_X64_DISABLED &&
+         config->x64_engine_mode != GEM_WINE_X64_INTERPRETER &&
+         config->x64_engine_mode != GEM_WINE_X64_JIT) ||
         !zero_words(config->reserved, sizeof(config->reserved) / sizeof(config->reserved[0])))
         return GEM_WINE_INVALID_ARGUMENT;
 
@@ -309,6 +371,7 @@ enum gem_wine_status gem_wine_process_create(const struct gem_wine_process_confi
 
 enum gem_wine_status gem_wine_process_destroy(struct gem_wine_process *process) {
     struct gem_wine_arm64x_image *image;
+    struct gem_wine_x64_image *x64_image;
     if (process == NULL)
         return GEM_WINE_INVALID_ARGUMENT;
     if (pthread_mutex_lock(&process->threads_lock) != 0)
@@ -323,6 +386,12 @@ enum gem_wine_status gem_wine_process_destroy(struct gem_wine_process *process) 
         struct gem_wine_arm64x_image *next = image->next;
         destroy_arm64x_image(image);
         image = next;
+    }
+    x64_image = process->x64_images;
+    while (x64_image != NULL) {
+        struct gem_wine_x64_image *next = x64_image->next;
+        destroy_x64_image(x64_image);
+        x64_image = next;
     }
     gem_memory_destroy(process->memory);
     (void)pthread_mutex_destroy(&process->images_lock);
@@ -426,6 +495,143 @@ gem_wine_process_register_arm64x_mapped(struct gem_wine_process *process,
     return gem_wine_process_prepare_arm64ec(process);
 }
 
+static uint16_t read_u16(const uint8_t *bytes) {
+    return (uint16_t)((uint16_t)bytes[0] | ((uint16_t)bytes[1] << 8U));
+}
+
+static uint32_t read_u32(const uint8_t *bytes) {
+    return (uint32_t)bytes[0] | ((uint32_t)bytes[1] << 8U) | ((uint32_t)bytes[2] << 16U) |
+           ((uint32_t)bytes[3] << 24U);
+}
+
+static bool read_x64_image(const struct gem_wine_process *process,
+                           const struct gem_wine_x64_image_config *config, uint64_t offset,
+                           void *destination, size_t size) {
+    return size <= config->image_size && offset <= config->image_size - size &&
+           offset <= UINT64_MAX - config->loaded_base &&
+           gem_memory_read(process->memory, config->loaded_base + offset, destination, size) ==
+               GEM_MEMORY_OK;
+}
+
+static struct gem_wine_x64_image *parse_x64_image(const struct gem_wine_process *process,
+                                                  const struct gem_wine_x64_image_config *config) {
+    enum { MAX_SECTIONS = 96 };
+    struct gem_wine_x64_image *image;
+    uint8_t dos[64];
+    uint8_t headers[84];
+    uint32_t nt_offset;
+    uint32_t entry_rva;
+    uint16_t section_count;
+    uint16_t optional_size;
+    uint64_t section_table;
+    size_t executable_count = 0U;
+    size_t index;
+    bool entry_executable = false;
+
+    if (config->loaded_base == 0U || config->image_size < sizeof(dos) ||
+        config->image_size > UINT32_MAX || config->loaded_base > UINT64_MAX - config->image_size ||
+        !read_x64_image(process, config, 0U, dos, sizeof(dos)) || dos[0] != 'M' || dos[1] != 'Z')
+        return NULL;
+    nt_offset = read_u32(dos + 60U);
+    if (!read_x64_image(process, config, nt_offset, headers, sizeof(headers)) ||
+        memcmp(headers, "PE\0\0", 4U) != 0 || read_u16(headers + 4U) != UINT16_C(0x8664) ||
+        read_u16(headers + 24U) != UINT16_C(0x20b))
+        return NULL;
+    section_count = read_u16(headers + 6U);
+    optional_size = read_u16(headers + 20U);
+    entry_rva = read_u32(headers + 40U);
+    if (section_count == 0U || section_count > MAX_SECTIONS || optional_size < 60U ||
+        read_u32(headers + 80U) != config->image_size)
+        return NULL;
+    section_table = (uint64_t)nt_offset + 24U + optional_size;
+    if (section_table > config->image_size ||
+        (uint64_t)section_count > (config->image_size - section_table) / 40U)
+        return NULL;
+    image = (struct gem_wine_x64_image *)calloc(1U, sizeof(*image));
+    if (image == NULL)
+        return NULL;
+    image->executable =
+        (struct gem_wine_x64_range *)calloc(section_count, sizeof(*image->executable));
+    if (image->executable == NULL) {
+        destroy_x64_image(image);
+        return NULL;
+    }
+    for (index = 0U; index < section_count; ++index) {
+        uint8_t section[40];
+        uint32_t virtual_size;
+        uint32_t virtual_address;
+        uint32_t raw_size;
+        uint32_t span;
+        uint32_t characteristics;
+        if (!read_x64_image(process, config, section_table + index * 40U, section,
+                            sizeof(section))) {
+            destroy_x64_image(image);
+            return NULL;
+        }
+        virtual_size = read_u32(section + 8U);
+        virtual_address = read_u32(section + 12U);
+        raw_size = read_u32(section + 16U);
+        characteristics = read_u32(section + 36U);
+        span = virtual_size > raw_size ? virtual_size : raw_size;
+        if (span == 0U)
+            continue;
+        if (virtual_address >= config->image_size || span > config->image_size - virtual_address) {
+            destroy_x64_image(image);
+            return NULL;
+        }
+        if ((characteristics & UINT32_C(0x20000000)) != 0U) {
+            struct gem_wine_x64_range *range = &image->executable[executable_count++];
+            range->start = config->loaded_base + virtual_address;
+            range->end = range->start + span;
+            if (entry_rva >= virtual_address && entry_rva < virtual_address + span)
+                entry_executable = true;
+        }
+    }
+    if (executable_count == 0U || (entry_rva != 0U && !entry_executable)) {
+        destroy_x64_image(image);
+        return NULL;
+    }
+    image->config = *config;
+    image->loaded_end = config->loaded_base + config->image_size;
+    image->executable_count = executable_count;
+    return image;
+}
+
+enum gem_wine_status
+gem_wine_process_register_x64_mapped(struct gem_wine_process *process,
+                                     const struct gem_wine_x64_image_config *config) {
+    struct gem_wine_x64_image *image;
+    struct gem_wine_x64_image *current;
+    if (process == NULL || config == NULL || config->version != GEM_WINE_X64_IMAGE_CONFIG_VERSION ||
+        config->struct_size != sizeof(*config) ||
+        !zero_words(config->reserved, sizeof(config->reserved) / sizeof(config->reserved[0])) ||
+        process->config.x64_engine_mode == GEM_WINE_X64_DISABLED)
+        return GEM_WINE_INVALID_ARGUMENT;
+    image = parse_x64_image(process, config);
+    if (image == NULL)
+        return GEM_WINE_INVALID_ARGUMENT;
+    if (pthread_mutex_lock(&process->images_lock) != 0) {
+        destroy_x64_image(image);
+        return GEM_WINE_ENGINE_ERROR;
+    }
+    for (current = process->x64_images; current != NULL; current = current->next) {
+        if (config->loaded_base < current->loaded_end &&
+            current->config.loaded_base < image->loaded_end) {
+            const bool identical =
+                current->config.loaded_base == config->loaded_base &&
+                current->loaded_end == image->loaded_end &&
+                memcmp(&current->config, &image->config, sizeof(image->config)) == 0;
+            (void)pthread_mutex_unlock(&process->images_lock);
+            destroy_x64_image(image);
+            return identical ? GEM_WINE_OK : GEM_WINE_CONFLICT;
+        }
+    }
+    image->next = process->x64_images;
+    process->x64_images = image;
+    (void)pthread_mutex_unlock(&process->images_lock);
+    return GEM_WINE_OK;
+}
+
 enum gem_wine_status gem_wine_process_reserve(struct gem_wine_process *process, uint64_t address,
                                               uint64_t size) {
     uint64_t reserved = address;
@@ -508,6 +714,8 @@ enum gem_wine_status gem_wine_process_invalidate_code(struct gem_wine_process *p
             return GEM_WINE_ENGINE_ERROR;
         }
         gem_arm64ec_runtime_invalidate_code(thread->runtime, address, size);
+        if (thread->x64_runtime != NULL)
+            gem_x64_runtime_invalidate_code(thread->x64_runtime, address, size);
         for (binding = thread->hybrids; binding != NULL; binding = binding->next)
             gem_hybrid_runtime_invalidate_code(binding->runtime, address, size);
         (void)pthread_mutex_unlock(&thread->runtime_lock);
@@ -521,6 +729,7 @@ enum gem_wine_status gem_wine_thread_create(struct gem_wine_process *process,
                                             struct gem_wine_thread **out_thread) {
     struct gem_wine_thread *thread;
     struct gem_arm64ec_runtime_config runtime_config;
+    struct gem_x64_runtime_config x64_config;
 
     if (process == NULL || config == NULL || out_thread == NULL)
         return GEM_WINE_INVALID_ARGUMENT;
@@ -557,8 +766,26 @@ enum gem_wine_status gem_wine_thread_create(struct gem_wine_process *process,
         free(thread);
         return GEM_WINE_ENGINE_ERROR;
     }
+    if (process->config.x64_engine_mode != GEM_WINE_X64_DISABLED) {
+        memset(&x64_config, 0, sizeof(x64_config));
+        x64_config.host_return_sentinel = process->config.host_return_sentinel;
+        x64_config.max_budget = process->config.segment_instruction_budget;
+        if (process->config.x64_engine_mode == GEM_WINE_X64_JIT) {
+            x64_config.engine_mode = GEM_X64_ENGINE_JIT;
+            x64_config.max_jit_cache_bytes = GEM_X64_JIT_CACHE_CAPACITY_BYTES;
+        }
+        thread->x64_runtime = gem_x64_runtime_create(process->memory, &x64_config);
+        if (thread->x64_runtime == NULL) {
+            gem_arm64ec_runtime_destroy(thread->runtime);
+            (void)pthread_mutex_destroy(&thread->runtime_lock);
+            (void)pthread_mutex_destroy(&thread->run_lock);
+            free(thread);
+            return GEM_WINE_ENGINE_ERROR;
+        }
+    }
     if (pthread_mutex_lock(&process->threads_lock) != 0) {
         gem_arm64ec_runtime_destroy(thread->runtime);
+        gem_x64_runtime_destroy(thread->x64_runtime);
         (void)pthread_mutex_destroy(&thread->runtime_lock);
         (void)pthread_mutex_destroy(&thread->run_lock);
         free(thread);
@@ -568,6 +795,7 @@ enum gem_wine_status gem_wine_thread_create(struct gem_wine_process *process,
         !gem_arm64ec_runtime_set_boundary_broker(thread->runtime, native_image_boundary, thread)) {
         (void)pthread_mutex_unlock(&process->threads_lock);
         gem_arm64ec_runtime_destroy(thread->runtime);
+        gem_x64_runtime_destroy(thread->x64_runtime);
         (void)pthread_mutex_destroy(&thread->runtime_lock);
         (void)pthread_mutex_destroy(&thread->run_lock);
         free(thread);
@@ -602,6 +830,7 @@ enum gem_wine_status gem_wine_thread_destroy(struct gem_wine_thread *thread) {
     (void)pthread_mutex_unlock(&process->threads_lock);
     atomic_store_explicit(&thread->active_hybrid, NULL, memory_order_release);
     destroy_hybrid_bindings(thread->hybrids);
+    gem_x64_runtime_destroy(thread->x64_runtime);
     gem_arm64ec_runtime_destroy(thread->runtime);
     (void)pthread_mutex_unlock(&thread->run_lock);
     (void)pthread_mutex_destroy(&thread->runtime_lock);
@@ -640,6 +869,8 @@ void gem_wine_thread_request_async_stop(struct gem_wine_thread *thread) {
             atomic_load_explicit(&thread->active_hybrid, memory_order_acquire);
         if (hybrid != NULL)
             gem_hybrid_runtime_request_async_stop(hybrid);
+        if (thread->x64_runtime != NULL)
+            gem_x64_runtime_request_async_stop(thread->x64_runtime);
         gem_arm64ec_runtime_request_async_stop(thread->runtime);
     }
 }
@@ -745,6 +976,15 @@ enum gem_wine_status gem_wine_thread_run(struct gem_wine_thread *thread,
             }
             if (!gem_hybrid_runtime_coordinator_active(hybrid_binding->runtime))
                 thread->coordinator_hybrid = NULL;
+        } else if (context.isa == GEM_ISA_X64 && thread->x64_runtime != NULL) {
+            struct gem_x64_stop_info x64_stop;
+            reason = gem_x64_runtime_run(thread->x64_runtime, &context, budget);
+            if (!gem_x64_runtime_last_stop_info(thread->x64_runtime, &x64_stop)) {
+                (void)pthread_mutex_unlock(&thread->runtime_lock);
+                status = GEM_WINE_ENGINE_ERROR;
+                break;
+            }
+            copy_x64_stop_info(&stop, &x64_stop);
         } else {
             struct gem_arm64ec_stop_info arm_stop;
             if (context.isa != GEM_ISA_ARM64EC) {
@@ -810,7 +1050,7 @@ enum gem_wine_status gem_wine_thread_run(struct gem_wine_thread *thread,
             status = GEM_WINE_ENGINE_ERROR;
             break;
         }
-        if (thread->config.boundary == NULL || context.isa != GEM_ISA_ARM64EC) {
+        if (thread->config.boundary == NULL) {
             run_result.outcome = GEM_WINE_RUN_UNHANDLED_STOP;
             status = GEM_WINE_STOPPED;
             break;
@@ -825,6 +1065,7 @@ enum gem_wine_status gem_wine_thread_run(struct gem_wine_thread *thread,
             struct gem_wine_boundary_request request;
             struct gem_wine_boundary_response response;
             struct gem_u128 upper_simd_before[16];
+            const bool preserve_native_upper_simd = context.isa == GEM_ISA_ARM64EC;
             enum gem_wine_status callback_status;
 
             memset(&request, 0, sizeof(request));
@@ -837,7 +1078,9 @@ enum gem_wine_status gem_wine_thread_run(struct gem_wine_thread *thread,
             response.version = GEM_WINE_BOUNDARY_ABI_VERSION;
             response.struct_size = (uint32_t)sizeof(response);
             response.context = context;
-            if (!gem_arm64ec_runtime_get_native_upper_simd(thread->runtime, upper_simd_before)) {
+            memset(upper_simd_before, 0, sizeof(upper_simd_before));
+            if (preserve_native_upper_simd &&
+                !gem_arm64ec_runtime_get_native_upper_simd(thread->runtime, upper_simd_before)) {
                 run_result.outcome = GEM_WINE_RUN_FAILED;
                 status = GEM_WINE_ENGINE_ERROR;
                 break;
@@ -847,7 +1090,9 @@ enum gem_wine_status gem_wine_thread_run(struct gem_wine_thread *thread,
             if (callback_status != GEM_WINE_OK ||
                 response.version != GEM_WINE_BOUNDARY_ABI_VERSION ||
                 response.struct_size != sizeof(response)) {
-                (void)gem_arm64ec_runtime_set_native_upper_simd(thread->runtime, upper_simd_before);
+                if (preserve_native_upper_simd)
+                    (void)gem_arm64ec_runtime_set_native_upper_simd(thread->runtime,
+                                                                    upper_simd_before);
                 run_result.outcome = GEM_WINE_RUN_FAILED;
                 status = GEM_WINE_CALLBACK_ERROR;
                 break;
@@ -872,7 +1117,9 @@ enum gem_wine_status gem_wine_thread_run(struct gem_wine_thread *thread,
                 ((request.event == GEM_WINE_EVENT_SYSCALL ||
                   request.event == GEM_WINE_EVENT_UNIX_CALL) &&
                  response.context.pc == request.context.pc)) {
-                (void)gem_arm64ec_runtime_set_native_upper_simd(thread->runtime, upper_simd_before);
+                if (preserve_native_upper_simd)
+                    (void)gem_arm64ec_runtime_set_native_upper_simd(thread->runtime,
+                                                                    upper_simd_before);
                 run_result.outcome = GEM_WINE_RUN_FAILED;
                 status = GEM_WINE_CALLBACK_ERROR;
                 break;

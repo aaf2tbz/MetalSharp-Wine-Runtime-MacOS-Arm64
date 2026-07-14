@@ -62,6 +62,15 @@ static void store_word(uint8_t *memory, size_t offset, uint32_t word) {
     memory[offset + 3U] = (uint8_t)(word >> 24U);
 }
 
+static void store_u16(uint8_t *memory, size_t offset, uint16_t value) {
+    memory[offset] = (uint8_t)value;
+    memory[offset + 1U] = (uint8_t)(value >> 8U);
+}
+
+static void store_u32(uint8_t *memory, size_t offset, uint32_t value) {
+    store_word(memory, offset, value);
+}
+
 static enum gem_wine_status boundary_callback(void *opaque,
                                               const struct gem_wine_boundary_request *request,
                                               struct gem_wine_boundary_response *response) {
@@ -170,6 +179,20 @@ static void initialize_context(struct gem_thread_context *context, uint64_t pc) 
     context->x[30] = HOST_RETURN;
 }
 
+static void initialize_x64_context(struct gem_thread_context *context, uint64_t pc) {
+    memset(context, 0, sizeof(*context));
+    context->layout_version = GEM_CONTEXT_LAYOUT_VERSION;
+    context->context_size = GEM_THREAD_CONTEXT_EXPECTED_SIZE;
+    context->teb = TEST_TEB;
+    context->x[18] = TEST_TEB;
+    context->isa = GEM_ISA_X64;
+    context->pc = pc;
+    context->sp = pc + UINT64_C(0x800);
+    context->x64_rflags = UINT64_C(2);
+    context->x64_mxcsr = UINT32_C(0x1f80);
+    context->x64_fcw = UINT16_C(0x37f);
+}
+
 int main(void) {
     const long host_page_long = sysconf(_SC_PAGESIZE);
     const size_t host_page = (size_t)host_page_long;
@@ -216,8 +239,17 @@ int main(void) {
     process_config.max_boundary_callbacks = 8U;
     process_config.host_return_sentinel = HOST_RETURN;
     process_config.unix_call_dispatcher = UNIX_DISPATCH;
+#if defined(__aarch64__)
+    process_config.x64_engine_mode = GEM_WINE_X64_JIT;
+#else
+    process_config.x64_engine_mode = GEM_WINE_X64_INTERPRETER;
+#endif
     invalid_process_config = process_config;
     invalid_process_config.reserved[0] = 1U;
+    assert(gem_wine_process_create(&invalid_process_config, &process) == GEM_WINE_INVALID_ARGUMENT);
+    assert(process == NULL);
+    invalid_process_config = process_config;
+    invalid_process_config.x64_engine_mode = (enum gem_wine_x64_engine_mode)99;
     assert(gem_wine_process_create(&invalid_process_config, &process) == GEM_WINE_INVALID_ARGUMENT);
     assert(process == NULL);
     invalid_process_config = process_config;
@@ -415,6 +447,50 @@ int main(void) {
     assert(result.outcome == GEM_WINE_RUN_UNHANDLED_STOP);
     assert(result.last_event == GEM_WINE_EVENT_SYSCALL);
     assert(result.boundary_callbacks == 0U);
+
+    /* Ordinary PE32+ x86_64 state routes directly to the process-selected
+     * GEM_x86_64 engine without requiring ARM64X metadata or a hybrid binding. */
+    {
+        const size_t nt_offset = 0x40U;
+        const size_t optional_size = 0x60U;
+        const size_t section_offset = nt_offset + 24U + optional_size;
+        const uint8_t x64_return[] = {0x48, 0xb8, 0xf0, 0xff, 0xff, 0xff,
+                                      0xff, 0xff, 0xff, 0xff, 0xff, 0xe0};
+        struct gem_wine_x64_image_config image_config;
+        memset(mapping, 0, host_page);
+        mapping[0] = 'M';
+        mapping[1] = 'Z';
+        store_u32(mapping, 60U, (uint32_t)nt_offset);
+        memcpy(mapping + nt_offset, "PE\0\0", 4U);
+        store_u16(mapping, nt_offset + 4U, UINT16_C(0x014c));
+        store_u16(mapping, nt_offset + 6U, 1U);
+        store_u16(mapping, nt_offset + 20U, (uint16_t)optional_size);
+        store_u16(mapping, nt_offset + 24U, UINT16_C(0x20b));
+        store_u32(mapping, nt_offset + 40U, (uint32_t)CODE_OFFSET);
+        store_u32(mapping, nt_offset + 80U, (uint32_t)host_page);
+        store_u32(mapping, section_offset + 8U, (uint32_t)(host_page - CODE_OFFSET));
+        store_u32(mapping, section_offset + 12U, (uint32_t)CODE_OFFSET);
+        store_u32(mapping, section_offset + 16U, (uint32_t)(host_page - CODE_OFFSET));
+        store_u32(mapping, section_offset + 36U, UINT32_C(0x60000020));
+        memset(&image_config, 0, sizeof(image_config));
+        image_config.version = GEM_WINE_X64_IMAGE_CONFIG_VERSION;
+        image_config.struct_size = (uint32_t)sizeof(image_config);
+        image_config.loaded_base = (uint64_t)(uintptr_t)mapping;
+        image_config.image_size = host_page;
+        assert(gem_wine_process_register_x64_mapped(process, &image_config) ==
+               GEM_WINE_INVALID_ARGUMENT);
+        store_u16(mapping, nt_offset + 4U, UINT16_C(0x8664));
+        assert(gem_wine_process_register_x64_mapped(process, &image_config) == GEM_WINE_OK);
+        assert(gem_wine_process_register_x64_mapped(process, &image_config) == GEM_WINE_OK);
+        memcpy(mapping + CODE_OFFSET, x64_return, sizeof(x64_return));
+        assert(gem_wine_process_invalidate_code(process, code, sizeof(x64_return)) == GEM_WINE_OK);
+        initialize_x64_context(&input, code);
+        assert(gem_wine_thread_run(thread, &input, &output, &result) == GEM_WINE_OK);
+        assert(result.outcome == GEM_WINE_RUN_COMPLETE);
+        assert(result.instructions_retired == 2U);
+        assert(result.boundary_callbacks == 0U);
+        assert(output.isa == GEM_ISA_X64 && output.pc == HOST_RETURN && output.teb == TEST_TEB);
+    }
     assert(gem_wine_thread_destroy(thread) == GEM_WINE_OK);
     assert(gem_wine_process_release(process, (uint64_t)(uintptr_t)mapping, (uint64_t)host_page) ==
            GEM_WINE_OK);

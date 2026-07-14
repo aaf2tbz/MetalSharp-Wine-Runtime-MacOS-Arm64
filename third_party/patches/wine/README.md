@@ -92,6 +92,12 @@ is not a release input.
      suspend or externally supplied context;
    - defers an in-flight hybrid suspend until the coordinator reaches an
      ARM64EC boundary that Wine's public context machinery can represent.
+13. `0013-ntdll-route-ordinary-x64-images-through-gem.patch`
+   - explicitly selects the bounded AArch64 Blink JIT for Wine-owned x64
+     threads;
+   - publishes every mapped ordinary PE32+ AMD64 image to GEM after mapping;
+   - keeps ARM64X images on their existing metadata registration path and
+     fails closed if checked x64 image registration is rejected.
 
 ## Current evidence and limitation
 

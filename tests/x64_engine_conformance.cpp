@@ -238,6 +238,13 @@ static void test_explicit_jit_mode() {
     }
     assert(gem_x64_runtime_jit_info(jit, &jit_info));
     assert(jit_info.cache_capacity_bytes == GEM_X64_JIT_CACHE_CAPACITY_BYTES);
+    gem_x64_runtime_request_async_stop(jit);
+    init(compiled);
+    assert(gem_x64_runtime_run(jit, &compiled, 1) == GEM_STOP_ASYNC_REQUEST);
+    assert(compiled.pc == CODE);
+    compiled.stop_reason = GEM_STOP_NONE;
+    assert(gem_x64_runtime_run(jit, &compiled, 1) == GEM_STOP_BUDGET_EXPIRED);
+    assert(compiled.x[8] == 0x2b);
 
     gem_memory *peer_memory = gem_memory_create();
     assert(peer_memory);
