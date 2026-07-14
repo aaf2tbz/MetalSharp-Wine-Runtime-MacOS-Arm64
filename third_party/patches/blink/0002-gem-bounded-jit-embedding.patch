@@ -1,0 +1,222 @@
+diff --git a/blink/gem_embed.c b/blink/gem_embed.c
+index a189ec0..ee7e75f 100644
+--- a/blink/gem_embed.c
++++ b/blink/gem_embed.c
+@@ -18,5 +18,6 @@
+ #include "blink/gem_embed.h"
+ 
++#include <pthread.h>
+ #include <setjmp.h>
+ #include <stdlib.h>
+ #include <string.h>
+@@ -27,6 +28,7 @@
+ #include "blink/flag.h"
+ #include "blink/flags.h"
+ #include "blink/linux.h"
++#include "blink/jit.h"
+ #include "blink/machine.h"
+ #include "blink/map.h"
+ #include "blink/rde.h"
+@@ -56,6 +58,16 @@ struct blink_gem_machine {
+   uint32_t trace_count;
+   uint32_t trace_overflowed;
+   struct blink_gem_decode_attempt last_decode;
++  enum blink_gem_engine_mode engine_mode;
++  uint64_t paths_generated;
++  uint64_t paths_executed;
++  uint64_t invalidations;
+ };
+ 
++static pthread_once_t gem_init_once = PTHREAD_ONCE_INIT;
++
++static void GemInit(void) {
++  InitMap();
++}
++
+ static struct blink_gem_result result(enum blink_gem_outcome o) {
+@@ -179,17 +191,41 @@ static enum blink_gem_access fault_access(struct Machine* m, int fetch) {
+ 
+ struct blink_gem_machine* blink_gem_machine_create(
+     const struct blink_gem_callbacks* cb, void* opaque) {
++  const struct blink_gem_config config = {
++      BLINK_GEM_CONFIG_ABI_VERSION, sizeof(config),
++      BLINK_GEM_ENGINE_INTERPRETER, 0, BLINK_GEM_JIT_CACHE_CAPACITY};
++  return blink_gem_machine_create_configured(cb, &config, opaque);
++}
++struct blink_gem_machine* blink_gem_machine_create_configured(
++    const struct blink_gem_callbacks* cb, const struct blink_gem_config* config,
++    void* opaque) {
+   struct blink_gem_machine* g;
+   if (!cb || cb->abi_version != 1 || cb->size != sizeof(*cb) || !cb->snapshot ||
+-      !cb->validate || !cb->commit)
++      !cb->validate || !cb->commit || !config ||
++      config->abi_version != BLINK_GEM_CONFIG_ABI_VERSION ||
++      config->size != sizeof(*config) || config->reserved ||
++      (config->engine_mode != BLINK_GEM_ENGINE_INTERPRETER &&
++       config->engine_mode != BLINK_GEM_ENGINE_JIT) ||
++      (config->engine_mode == BLINK_GEM_ENGINE_JIT &&
++       config->max_jit_cache_bytes < BLINK_GEM_JIT_CACHE_CAPACITY))
+     return 0;
++#if !defined(__aarch64__)
++  if (config->engine_mode == BLINK_GEM_ENGINE_JIT) return 0;
++#endif
+   g = calloc(1, sizeof(*g));
+   if (!g) return 0;
+   g->cb = *cb;
+   g->opaque = opaque;
++  g->engine_mode = config->engine_mode;
+   FLAG_nolinear = true;
++  pthread_once(&gem_init_once, GemInit);
+   g->system = NewSystem(XED_MACHINE_MODE_LONG);
+   if (!g->system) goto Fail;
++  if (g->engine_mode == BLINK_GEM_ENGINE_INTERPRETER) {
++    if (DisableJit(&g->system->jit) == -1) goto Fail;
++  } else if (IsJitDisabled(&g->system->jit)) {
++    goto Fail;
++  }
+   g->system->cr3 = AllocatePageTable(g->system);
+   if (!g->system->cr3) goto Fail;
+   g->machine = NewMachine(g->system, 0);
+@@ -222,6 +247,7 @@ struct blink_gem_result blink_gem_machine_step(struct blink_gem_machine* g,
+   int rc, retries, handler_id = 0;
+   volatile int fetching;
+   uint64_t fetch_address = 0, fetch_size = 0, commit_fault = 0;
++  uintptr_t hook_before = 0, hook_after = 0;
+   if (!g || !in || !out || in->abi_version != 1 || in->size != sizeof(*in) ||
+       !canonical(in->rip) || !canonical(in->gpr[4]) || !canonical(in->gs_base))
+     return result(BLINK_GEM_INVALID);
+@@ -274,7 +300,22 @@ struct blink_gem_result blink_gem_machine_step(struct blink_gem_machine* g,
+         return result(BLINK_GEM_UNSUPPORTED);
+       }
+       fetching = 0;
++      if (g->engine_mode == BLINK_GEM_ENGINE_JIT)
++        hook_before = GetJitHook(&g->system->jit, m->ip);
+       ExecuteInstruction(m);
++      if (g->engine_mode == BLINK_GEM_ENGINE_JIT) {
++        if (IsMakingPath(m)) CompletePath(DISPATCH_NOTHING);
++        if (FlushJit(&g->system->jit) == -1) {
++          m->canhalt = false;
++          r = result(BLINK_GEM_INVALID);
++          r.engine_status = UINT32_C(0xfffffffd);
++          return r;
++        }
++        hook_after = GetJitHook(&g->system->jit, fetch_address);
++        if (!hook_before && hook_after) ++g->paths_generated;
++        if (hook_before && hook_before != (uintptr_t)JitlessDispatch)
++          ++g->paths_executed;
++      }
+       m->canhalt = false;
+     } else {
+       m->canhalt = false;
+@@ -289,6 +337,7 @@ struct blink_gem_result blink_gem_machine_step(struct blink_gem_machine* g,
+         r.engine_status = (uint32_t)rc;
+         return r;
+       }
++      r = result(BLINK_GEM_MEMORY_FAULT);
+       r.fault_address = m->faultaddr;
+       r.access = fault_access(m, fetching);
+       if (!find_page(g, m->faultaddr)) {
+@@ -369,7 +410,46 @@ struct blink_gem_result blink_gem_machine_step(struct blink_gem_machine* g,
+   return r;
+ }
+ const char* blink_gem_embedding_version(void) {
+-  return "blink-f006a4fc-real-interpreter-gem-v1";
++  return "blink-f006a4fc-gem-interpreter-jit-v2";
++}
++bool blink_gem_machine_jit_info(const struct blink_gem_machine* g,
++                                struct blink_gem_jit_info* out) {
++  if (!g || !out || out->abi_version != BLINK_GEM_JIT_INFO_ABI_VERSION ||
++      out->size != sizeof(*out))
++    return false;
++  out->engine_mode = g->engine_mode;
++#if defined(__aarch64__)
++  out->host_architecture = BLINK_GEM_HOST_AARCH64;
++#elif defined(__x86_64__)
++  out->host_architecture = BLINK_GEM_HOST_X86_64;
++#else
++  out->host_architecture = BLINK_GEM_HOST_UNKNOWN;
++#endif
++  out->cache_capacity_bytes =
++      g->engine_mode == BLINK_GEM_ENGINE_JIT ? BLINK_GEM_JIT_CACHE_CAPACITY : 0;
++  out->paths_generated = g->paths_generated;
++  out->paths_executed = g->paths_executed;
++  out->invalidations = g->invalidations;
++  return true;
++}
++bool blink_gem_machine_invalidate_code(struct blink_gem_machine* g,
++                                       uint64_t address, uint64_t size) {
++  uint64_t page, last;
++  if (!g || !size || !canonical(address) || size - 1 > UINT64_MAX - address ||
++      !canonical(address + size - 1))
++    return false;
++  page = address & ~UINT64_C(4095);
++  last = (address + size - 1) & ~UINT64_C(4095);
++  if (g->engine_mode == BLINK_GEM_ENGINE_JIT) {
++    for (;;) {
++      ResetJitPage(&g->system->jit, page);
++      if (page == last) break;
++      page += 4096;
++    }
++  }
++  ResetInstructionCache(g->machine);
++  ++g->invalidations;
++  return true;
+ }
+ void blink_gem_machine_trace_reset(struct blink_gem_machine* g) {
+   if (g) {
+diff --git a/blink/gem_embed.h b/blink/gem_embed.h
+index af211c0..a2d5ac2 100644
+--- a/blink/gem_embed.h
++++ b/blink/gem_embed.h
+@@ -26,6 +26,33 @@
+ #define BLINK_GEM_MAX_TRACE_ENTRIES 256u
+ #define BLINK_GEM_DECODE_ATTEMPT_ABI_VERSION 1u
+ #define BLINK_GEM_DECODE_ATTEMPT_NAME_BYTES  32u
++#define BLINK_GEM_CONFIG_ABI_VERSION 1u
++#define BLINK_GEM_JIT_INFO_ABI_VERSION 1u
++#define BLINK_GEM_JIT_CACHE_CAPACITY 32505856u
++enum blink_gem_engine_mode {
++  BLINK_GEM_ENGINE_INTERPRETER = 0,
++  BLINK_GEM_ENGINE_JIT = 1
++};
++enum blink_gem_host_architecture {
++  BLINK_GEM_HOST_UNKNOWN = 0,
++  BLINK_GEM_HOST_X86_64 = 1,
++  BLINK_GEM_HOST_AARCH64 = 2
++};
++struct blink_gem_config {
++  uint32_t abi_version, size;
++  enum blink_gem_engine_mode engine_mode;
++  uint32_t reserved;
++  uint64_t max_jit_cache_bytes;
++};
++struct blink_gem_jit_info {
++  uint32_t abi_version, size;
++  enum blink_gem_engine_mode engine_mode;
++  enum blink_gem_host_architecture host_architecture;
++  uint64_t cache_capacity_bytes;
++  uint64_t paths_generated;
++  uint64_t paths_executed;
++  uint64_t invalidations;
++};
+ /*
+  * Decoder-owned handler identity.  Each id names the exact Blink handler that
+  * Blink's own decode dispatch (GetOp(Mopcode(rde))) selected for a retired
+@@ -133,11 +160,17 @@ struct blink_gem_callbacks {
+ struct blink_gem_machine;
+ struct blink_gem_machine* blink_gem_machine_create(
+     const struct blink_gem_callbacks*, void*);
++struct blink_gem_machine* blink_gem_machine_create_configured(
++    const struct blink_gem_callbacks*, const struct blink_gem_config*, void*);
+ void blink_gem_machine_destroy(struct blink_gem_machine*);
+ struct blink_gem_result blink_gem_machine_step(struct blink_gem_machine*,
+                                                const struct blink_gem_state*,
+                                                struct blink_gem_state*);
+ const char* blink_gem_embedding_version(void);
++bool blink_gem_machine_jit_info(const struct blink_gem_machine*,
++                                struct blink_gem_jit_info*);
++bool blink_gem_machine_invalidate_code(struct blink_gem_machine*, uint64_t,
++                                       uint64_t);
+ /*
+  * Bounded, machine-owned, decode-order handler trace.  Storage is fixed at
+  * BLINK_GEM_MAX_TRACE_ENTRIES, is never wrapped, and sets a sticky overflow

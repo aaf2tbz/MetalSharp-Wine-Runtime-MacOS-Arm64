@@ -2,8 +2,13 @@
 #include "blink/gem_embed.h"
 #include "x64_engine_internal.h"
 #include "x64_engine_trace.h"
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+/* Blink's JIT owns process-global executable-memory state. Keep every JIT
+ * lifecycle, generation, execution, query, and invalidation operation inside
+ * one process-wide critical section. Interpreter runtimes remain independent. */
+static pthread_mutex_t jit_mutex = PTHREAD_MUTEX_INITIALIZER;
 static uint32_t snapshot(void *o, uint64_t a, uint8_t data[4096], uint32_t *p) {
     struct gem_x64_runtime *r = o;
     uint32_t gp = 0;
@@ -53,12 +58,25 @@ static uint32_t commit(void *o, const struct blink_gem_write *w, size_t n,
 bool gem_x64_blink_create(struct gem_x64_runtime *r) {
     const struct blink_gem_callbacks c = {BLINK_GEM_ABI_VERSION, sizeof(c), snapshot, validate,
                                           commit};
-    r->backend = blink_gem_machine_create(&c, r);
+    const struct blink_gem_config config = {BLINK_GEM_CONFIG_ABI_VERSION, sizeof(config),
+                                            r->config.engine_mode == GEM_X64_ENGINE_JIT
+                                                ? BLINK_GEM_ENGINE_JIT
+                                                : BLINK_GEM_ENGINE_INTERPRETER,
+                                            0, r->config.max_jit_cache_bytes};
+    if (r->config.engine_mode == GEM_X64_ENGINE_JIT)
+        pthread_mutex_lock(&jit_mutex);
+    r->backend = blink_gem_machine_create_configured(&c, &config, r);
+    if (r->config.engine_mode == GEM_X64_ENGINE_JIT)
+        pthread_mutex_unlock(&jit_mutex);
     return r->backend != 0;
 }
 void gem_x64_blink_destroy(struct gem_x64_runtime *r) {
+    if (r->config.engine_mode == GEM_X64_ENGINE_JIT)
+        pthread_mutex_lock(&jit_mutex);
     blink_gem_machine_destroy(r->backend);
     r->backend = 0;
+    if (r->config.engine_mode == GEM_X64_ENGINE_JIT)
+        pthread_mutex_unlock(&jit_mutex);
 }
 static void import(const struct gem_x64_context *s, struct blink_gem_state *d) {
     memset(d, 0, sizeof(*d));
@@ -90,7 +108,11 @@ enum gem_stop_reason gem_x64_blink_step(struct gem_x64_runtime *r, const struct 
     struct blink_gem_state bi, bo;
     struct blink_gem_result br;
     import(in, &bi);
+    if (r->config.engine_mode == GEM_X64_ENGINE_JIT)
+        pthread_mutex_lock(&jit_mutex);
     br = blink_gem_machine_step(r->backend, &bi, &bo);
+    if (r->config.engine_mode == GEM_X64_ENGINE_JIT)
+        pthread_mutex_unlock(&jit_mutex);
     *retired = br.retired;
     r->last_stop.fault_address = br.fault_address;
     r->last_stop.access = (enum gem_x64_memory_access)br.access;
@@ -118,6 +140,51 @@ enum gem_stop_reason gem_x64_blink_step(struct gem_x64_runtime *r, const struct 
 }
 const char *gem_x64_blink_version(void) {
     return blink_gem_embedding_version();
+}
+bool gem_x64_blink_invalidate_code(struct gem_x64_runtime *r, uint64_t address, uint64_t size) {
+    bool ok;
+    if (!r)
+        return false;
+    if (r->config.engine_mode == GEM_X64_ENGINE_JIT)
+        pthread_mutex_lock(&jit_mutex);
+    ok = blink_gem_machine_invalidate_code(r->backend, address, size);
+    if (r->config.engine_mode == GEM_X64_ENGINE_JIT)
+        pthread_mutex_unlock(&jit_mutex);
+    return ok;
+}
+bool gem_x64_blink_jit_info(const struct gem_x64_runtime *r, struct gem_x64_jit_info *out) {
+    struct blink_gem_jit_info info;
+    bool ok;
+    if (!r || !out || r->running)
+        return false;
+    memset(&info, 0, sizeof(info));
+    info.abi_version = BLINK_GEM_JIT_INFO_ABI_VERSION;
+    info.size = sizeof(info);
+    if (r->config.engine_mode == GEM_X64_ENGINE_JIT)
+        pthread_mutex_lock(&jit_mutex);
+    ok = blink_gem_machine_jit_info(r->backend, &info);
+    if (r->config.engine_mode == GEM_X64_ENGINE_JIT)
+        pthread_mutex_unlock(&jit_mutex);
+    if (!ok)
+        return false;
+    out->engine_mode =
+        info.engine_mode == BLINK_GEM_ENGINE_JIT ? GEM_X64_ENGINE_JIT : GEM_X64_ENGINE_INTERPRETER;
+    switch (info.host_architecture) {
+    case BLINK_GEM_HOST_X86_64:
+        out->host_architecture = GEM_X64_HOST_X86_64;
+        break;
+    case BLINK_GEM_HOST_AARCH64:
+        out->host_architecture = GEM_X64_HOST_AARCH64;
+        break;
+    default:
+        out->host_architecture = GEM_X64_HOST_UNKNOWN;
+        break;
+    }
+    out->cache_capacity_bytes = info.cache_capacity_bytes;
+    out->paths_generated = info.paths_generated;
+    out->paths_executed = info.paths_executed;
+    out->invalidations = info.invalidations;
+    return true;
 }
 void gem_x64_runtime_handler_trace_reset(struct gem_x64_runtime *r) {
     if (r)

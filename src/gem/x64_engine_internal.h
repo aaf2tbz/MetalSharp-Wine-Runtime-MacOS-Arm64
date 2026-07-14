@@ -16,6 +16,8 @@ struct gem_x64_runtime {
 };
 bool gem_x64_blink_create(struct gem_x64_runtime *);
 void gem_x64_blink_destroy(struct gem_x64_runtime *);
+bool gem_x64_blink_invalidate_code(struct gem_x64_runtime *, uint64_t, uint64_t);
+bool gem_x64_blink_jit_info(const struct gem_x64_runtime *, struct gem_x64_jit_info *);
 enum gem_stop_reason gem_x64_blink_step(struct gem_x64_runtime *, const struct gem_x64_context *,
                                         struct gem_x64_context *, uint32_t *);
 const char *gem_x64_blink_version(void);

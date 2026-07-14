@@ -57,20 +57,20 @@ extend their explicit interfaces and keep their existing tests green.
 
 ### Phase 2 — add a sound embedded Blink JIT
 
-- [ ] Introduce explicit interpreter and JIT engine modes; never silently
+- [x] Introduce explicit interpreter and JIT engine modes; never silently
       select or fall back between them.
-- [ ] Extend the pinned embedding ABI for bounded block execution, canonical
+- [x] Extend the pinned embedding ABI for bounded block execution, canonical
       state reconciliation, checked memory, and execution-owned evidence.
-- [ ] Require native ARM64 generated code on Apple Silicon and reject any
+- [x] Require native ARM64 generated code on Apple Silicon and reject any
       x86_64 host code or translated process.
-- [ ] Enforce `MAP_JIT`/W^X discipline, thread-local write protection, bounded
+- [x] Enforce `MAP_JIT`/W^X discipline, thread-local write protection, bounded
       cache size, instruction-cache synchronization, deterministic code
       invalidation, and safe self-modifying-code handling.
-- [ ] Serialize shared JIT generation until a stronger concurrency proof is
+- [x] Serialize shared JIT generation until a stronger concurrency proof is
       accepted; keep per-runtime architectural state thread-confined.
 - [ ] Differentially compare JIT and interpreter state, memory, stops, faults,
       atomics, and x86-TSO outcomes for identical instruction streams.
-- [ ] Add forced invalidation, stale-code, unsupported instruction,
+- [x] Add forced invalidation, stale-code, unsupported instruction,
       exception/fault, timeout, cleanup, sanitizer, and stress coverage.
 
 ### Phase 3 — route ordinary x86_64 Wine guests

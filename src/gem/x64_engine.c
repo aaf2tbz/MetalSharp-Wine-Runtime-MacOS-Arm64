@@ -13,6 +13,16 @@ struct gem_x64_runtime *gem_x64_runtime_create(struct gem_memory *m,
     r->memory = m;
     if (c)
         r->config = *c;
+    if (r->config.reserved ||
+        (r->config.engine_mode != GEM_X64_ENGINE_INTERPRETER &&
+         r->config.engine_mode != GEM_X64_ENGINE_JIT) ||
+        (r->config.engine_mode == GEM_X64_ENGINE_INTERPRETER &&
+         r->config.max_jit_cache_bytes != 0) ||
+        (r->config.engine_mode == GEM_X64_ENGINE_JIT &&
+         r->config.max_jit_cache_bytes != GEM_X64_JIT_CACHE_CAPACITY_BYTES)) {
+        free(r);
+        return 0;
+    }
     if (!r->config.host_return_sentinel)
         r->config.host_return_sentinel = GEM_X64_DEFAULT_HOST_RETURN_SENTINEL;
     if (!gem_x64_blink_create(r)) {
@@ -93,12 +103,16 @@ bool gem_x64_runtime_last_instruction_was_ret(const struct gem_x64_runtime *r) {
     return r != NULL && r->last_stop.instructions_retired != 0U && r->last_instruction_was_ret;
 }
 void gem_x64_runtime_invalidate_code(struct gem_x64_runtime *r, uint64_t a, uint64_t s) {
-    (void)r;
-    (void)a;
-    (void)s;
+    if (r && !r->running)
+        (void)gem_x64_blink_invalidate_code(r, a, s);
+}
+bool gem_x64_runtime_jit_info(const struct gem_x64_runtime *r, struct gem_x64_jit_info *o) {
+    return gem_x64_blink_jit_info(r, o);
 }
 const char *gem_x64_runtime_engine_name(const struct gem_x64_runtime *r) {
-    return r ? "Blink interpreter" : "unavailable";
+    if (!r)
+        return "unavailable";
+    return r->config.engine_mode == GEM_X64_ENGINE_JIT ? "Blink JIT" : "Blink interpreter";
 }
 const char *gem_x64_runtime_engine_version(const struct gem_x64_runtime *r) {
     return r ? gem_x64_blink_version() : "unavailable";
@@ -107,8 +121,9 @@ const char *gem_x64_runtime_engine_license(const struct gem_x64_runtime *r) {
     return r ? "ISC" : "unavailable";
 }
 const char *gem_x64_runtime_engine_provenance(const struct gem_x64_runtime *r) {
-    return r ? "jart/blink@f006a4fc6f9b8de9272504fdff0dbbe5ce5dc580;real-interpreter;"
-               "DISABLE_JIT;patch-sha256="
-               "36774371e862c7a44775b19d16b130c23ab0beccf223d755b0321225c7fbfd03"
+    return r ? "jart/blink@f006a4fc6f9b8de9272504fdff0dbbe5ce5dc580;explicit-interpreter-or-"
+               "single-instruction-jit;bounded-cache;process-serialized;patch-sha256="
+               "36774371e862c7a44775b19d16b130c23ab0beccf223d755b0321225c7fbfd03,"
+               "560648510b5d3b5e0feb5e9462fb1534d652422f15cf69e14662a276fd96d396"
              : "unavailable";
 }

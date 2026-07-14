@@ -9,7 +9,14 @@
 extern "C" {
 #endif
 #define GEM_X64_DEFAULT_HOST_RETURN_SENTINEL UINT64_C(0xfffffffffffffff0)
+#define GEM_X64_JIT_CACHE_CAPACITY_BYTES UINT64_C(32505856)
 struct gem_x64_runtime;
+enum gem_x64_engine_mode { GEM_X64_ENGINE_INTERPRETER = 0, GEM_X64_ENGINE_JIT = 1 };
+enum gem_x64_host_architecture {
+    GEM_X64_HOST_UNKNOWN = 0,
+    GEM_X64_HOST_X86_64 = 1,
+    GEM_X64_HOST_AARCH64 = 2
+};
 enum gem_x64_memory_access {
     GEM_X64_ACCESS_NONE = 0,
     GEM_X64_ACCESS_FETCH = 1,
@@ -18,6 +25,14 @@ enum gem_x64_memory_access {
 };
 struct gem_x64_runtime_config {
     uint64_t host_return_sentinel, max_budget;
+    enum gem_x64_engine_mode engine_mode;
+    uint32_t reserved;
+    uint64_t max_jit_cache_bytes;
+};
+struct gem_x64_jit_info {
+    enum gem_x64_engine_mode engine_mode;
+    enum gem_x64_host_architecture host_architecture;
+    uint64_t cache_capacity_bytes, paths_generated, paths_executed, invalidations;
 };
 struct gem_x64_stop_info {
     enum gem_stop_reason reason;
@@ -44,11 +59,10 @@ bool gem_x64_runtime_last_stop_info(const struct gem_x64_runtime *, struct gem_x
 bool gem_x64_runtime_last_instruction_was_call(const struct gem_x64_runtime *);
 /* Execution-owned Blink decoder identity for the most recently retired RET. */
 bool gem_x64_runtime_last_instruction_was_ret(const struct gem_x64_runtime *);
-/* The interpreter-only backend refreshes its transient page shadow before
- * every instruction and owns no translated-code cache, so invalidation is a
- * documented no-op. A future cache/JIT backend must replace this contract and
- * prove process-serialized generation plus cache maintenance before use. */
+/* Invalidates translated code and Blink's instruction cache for the supplied
+ * canonical, non-empty guest range. Invalid ranges fail closed as a no-op. */
 void gem_x64_runtime_invalidate_code(struct gem_x64_runtime *, uint64_t, uint64_t);
+bool gem_x64_runtime_jit_info(const struct gem_x64_runtime *, struct gem_x64_jit_info *);
 const char *gem_x64_runtime_engine_name(const struct gem_x64_runtime *);
 const char *gem_x64_runtime_engine_version(const struct gem_x64_runtime *);
 const char *gem_x64_runtime_engine_license(const struct gem_x64_runtime *);

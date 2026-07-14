@@ -1,8 +1,9 @@
-# Blink real-interpreter GEM embedding patch
+# Blink interpreter and bounded-JIT GEM embedding patches
 
 This ISC patch applies only to Blink `f006a4fc6f9b8de9272504fdff0dbbe5ce5dc580` from the
-SHA-256 verified upstream archive. The zero-context patch SHA-256 is
-`36774371e862c7a44775b19d16b130c23ab0beccf223d755b0321225c7fbfd03`. It adds an opaque
+SHA-256 verified upstream archive. The ordered patch SHA-256 values are
+`36774371e862c7a44775b19d16b130c23ab0beccf223d755b0321225c7fbfd03` and
+`560648510b5d3b5e0feb5e9462fb1534d652422f15cf69e14662a276fd96d396`. They add an opaque
 bounded step API around Blink's existing `NewSystem`/`NewMachine`, `LoadInstruction`, decoded `GetOp` handler selection, and
 `ExecuteInstruction`/`JitlessDispatch`. It does not contain a decoder or opcode parser.
 
@@ -35,16 +36,25 @@ The record is reset on every step, populated only after
 a successful `LoadInstruction`, and is diagnostic-only — it never influences execution,
 allowlisting, or committed architectural state.
 
+The second patch adds explicit interpreter and JIT modes. JIT selection is accepted only when the
+embedding is compiled for an AArch64 host and the caller supplies the exact fixed 32,505,856-byte
+cache bound. Every path is forcibly completed after one guest instruction, flushed before
+publication, and invalidated by guest page. Blink's pinned Apple path uses `MAP_JIT`, per-thread
+`pthread_jit_write_protect_np`, RX protection where required, and `sys_icache_invalidate`. The
+MetalSharp wrapper serializes all JIT operations process-wide. Interpreter is the zero-initialized
+default and there is no mode fallback.
+
 Exact build:
 
 ```sh
-./configure --disable-jit
+./configure
 $MAKE clean
 $MAKE -j2 o//blink/blink.a
 ```
 
 CMake resolves `$MAKE` by searching for `gmake` and then `make`, performs those commands in the
-verified FetchContent tree, and links the actual full static interpreter archive. `HAVE_JIT` is absent; JIT code is not referenced by the accepting target.
+verified FetchContent tree, and links the full static archive. Runtime configuration, host
+architecture checks, and tests determine whether the interpreter or bounded AArch64 JIT executes.
 The embedding API consists only of `blink_gem_machine_create`, `blink_gem_machine_destroy`,
 `blink_gem_machine_step`, `blink_gem_embedding_version`, the diagnostic trace queries
 `blink_gem_machine_trace_reset`, `blink_gem_machine_trace_info`, `blink_gem_machine_trace_read`,

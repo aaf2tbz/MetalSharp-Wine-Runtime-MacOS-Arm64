@@ -270,17 +270,43 @@ def audit_decode_attempt(provenance, machine_text, embedding_text, embedding_hea
     )
 
 
+def audit_jit_safety(source_root, provenance, embedding_text, embedding_header):
+    jit = (source_root / "blink/jit.c").read_text()
+    jit_header = (source_root / "blink/jit.h").read_text()
+    safety = provenance["jitSafety"]
+    need(digest(source_root / "blink/jit.c") == safety["jitSourceSha256"], "JIT source hash")
+    need(digest(source_root / "blink/jit.h") == safety["jitHeaderSha256"], "JIT header hash")
+    for required in (
+        "MAP_JIT | MAP_PRIVATE | MAP_ANONYMOUS_",
+        "pthread_jit_write_protect_np_workaround(false)",
+        "pthread_jit_write_protect_np_workaround(true)",
+        "sys_icache_invalidate(",
+        "PROT_READ | PROT_EXEC",
+    ):
+        need(required in jit, f"missing pinned JIT safety primitive {required}")
+    need("#define kJitMemorySize   32505856" in jit_header, "JIT cache bound drift")
+    need(
+        "#define BLINK_GEM_JIT_CACHE_CAPACITY 32505856u" in embedding_header,
+        "ABI cache bound drift",
+    )
+    need("CompletePath(DISPATCH_NOTHING)" in embedding_text, "JIT path is not one instruction")
+    need("#if !defined(__aarch64__)" in embedding_text, "non-ARM64 JIT rejection missing")
+    need(safety["hostArchitecture"] == "aarch64-only", "JIT host architecture provenance")
+    need(safety["pathBoundary"] == "exactly one guest instruction", "JIT path provenance")
+    need(safety["cacheCapacityBytes"] == 32505856, "JIT capacity provenance")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", type=Path, required=True)
-    parser.add_argument("--patch", type=Path, required=True)
+    parser.add_argument("--patch", type=Path, required=True, action="append")
     parser.add_argument("--provenance", type=Path, required=True)
     args = parser.parse_args()
 
     provenance = json.loads(args.provenance.read_text())
-    need(provenance["schemaVersion"] == 2, "provenance schema")
+    need(provenance["schemaVersion"] == 3, "provenance schema")
     need(provenance["revision"] == PINNED_REVISION, "revision")
-    need(digest(args.patch) == provenance["patchSha256"], "patch hash")
+    need([digest(patch) for patch in args.patch] == provenance["patchSha256"], "patch hashes")
     for relative, expected_hash in provenance["postPatch"].items():
         need(digest(args.source / relative) == expected_hash, f"hash {relative}")
 
@@ -310,9 +336,21 @@ def main():
     ):
         need(forbidden not in embedding, f"forbidden {forbidden}")
 
+    for required in (
+        "blink_gem_machine_create_configured(",
+        "DisableJit(&g->system->jit)",
+        "CompletePath(DISPATCH_NOTHING)",
+        "FlushJit(&g->system->jit)",
+        "ResetJitPage(&g->system->jit",
+        "ResetInstructionCache(g->machine)",
+        "BLINK_GEM_JIT_CACHE_CAPACITY",
+    ):
+        need(required in embedding or required in embedding_header, f"missing JIT invariant {required}")
+
     audit_handlers(args.source, provenance, machine)
     audit_trace(provenance, machine, embedding, embedding_header)
     audit_decode_attempt(provenance, machine, embedding, embedding_header)
+    audit_jit_safety(args.source, provenance, embedding, embedding_header)
     need(
         "if (m->gemembed)" in throw and "siglongjmp(m->onhalt, code)" in throw,
         "structured halt missing",

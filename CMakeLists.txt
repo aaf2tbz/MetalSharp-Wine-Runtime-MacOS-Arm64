@@ -159,6 +159,7 @@ if(MSWR_ENABLE_X64_ENGINE)
         "${CMAKE_CURRENT_SOURCE_DIR}/tools/audit_blink_embedding.py"
         --source "${blink_gem_SOURCE_DIR}"
         --patch "${CMAKE_CURRENT_SOURCE_DIR}/third_party/patches/blink/0001-gem-real-interpreter-embedding.patch"
+        --patch "${CMAKE_CURRENT_SOURCE_DIR}/third_party/patches/blink/0002-gem-bounded-jit-embedding.patch"
         --provenance "${CMAKE_CURRENT_SOURCE_DIR}/docs/architecture/adr/0008-blink-embedding.provenance.json"
         RESULT_VARIABLE blink_audit_result)
     if(NOT blink_audit_result EQUAL 0)
@@ -169,7 +170,7 @@ if(MSWR_ENABLE_X64_ENGINE)
         DOWNLOAD_COMMAND ""
         UPDATE_COMMAND ""
         PATCH_COMMAND ""
-        CONFIGURE_COMMAND "${blink_gem_SOURCE_DIR}/configure" --disable-jit
+        CONFIGURE_COMMAND "${blink_gem_SOURCE_DIR}/configure"
         BUILD_COMMAND "${MSWR_BLINK_MAKE_EXECUTABLE}" clean
         COMMAND "${MSWR_BLINK_MAKE_EXECUTABLE}" -j2 o//blink/blink.a
         INSTALL_COMMAND ""

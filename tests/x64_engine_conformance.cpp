@@ -5,14 +5,21 @@ extern "C" {
 #include "blink/gem_embed.h"
 }
 #include <array>
+#include <atomic>
 #include <cassert>
 #include <cstdint>
 #include <cstring>
+#include <thread>
 static constexpr uint64_t CODE = 0x10000, DATA = 0x20000, STACK = 0x30000, TEB = 0x70000;
 static void map(gem_memory *m, uint64_t a, uint64_t n, uint32_t p) {
     uint64_t x = a;
     assert(gem_memory_reserve(m, &x, n) == GEM_MEMORY_OK);
     assert(gem_memory_commit(m, a, n, p) == GEM_MEMORY_OK);
+}
+static bool same_stop(const gem_x64_stop_info &a, const gem_x64_stop_info &b) {
+    return a.reason == b.reason && a.instructions_retired == b.instructions_retired &&
+           a.fault_address == b.fault_address && a.access == b.access &&
+           a.memory_error == b.memory_error && a.engine_status == b.engine_status;
 }
 static uint32_t embedding_snapshot(void *, uint64_t, uint8_t[4096], uint32_t *) {
     return 0;
@@ -74,9 +81,208 @@ static void init(gem_thread_context &c) {
         c.x87[i].hi = 0x22220000 + i;
     }
 }
+static void test_explicit_jit_mode() {
+    const uint8_t instruction[] = {0x48, 0xb8, 0x2a, 0, 0, 0, 0, 0, 0, 0};
+    gem_memory *interpreter_memory = gem_memory_create();
+    gem_memory *jit_memory = gem_memory_create();
+    assert(interpreter_memory && jit_memory);
+    map(interpreter_memory, CODE, 4096, GEM_PAGE_EXECUTE_READWRITE);
+    map(interpreter_memory, DATA, 4096, GEM_PAGE_READWRITE);
+    map(interpreter_memory, STACK, 4096, GEM_PAGE_READWRITE);
+    map(jit_memory, CODE, 4096, GEM_PAGE_EXECUTE_READWRITE);
+    map(jit_memory, DATA, 4096, GEM_PAGE_READWRITE);
+    map(jit_memory, STACK, 4096, GEM_PAGE_READWRITE);
+    assert(gem_memory_write(interpreter_memory, CODE, instruction, sizeof(instruction)) ==
+           GEM_MEMORY_OK);
+    assert(gem_memory_write(jit_memory, CODE, instruction, sizeof(instruction)) == GEM_MEMORY_OK);
+
+    gem_x64_runtime_config interpreter_config{};
+    interpreter_config.max_budget = 1;
+    gem_x64_runtime_config jit_config{};
+    jit_config.max_budget = 1;
+    jit_config.engine_mode = GEM_X64_ENGINE_JIT;
+    jit_config.max_jit_cache_bytes = GEM_X64_JIT_CACHE_CAPACITY_BYTES;
+    gem_x64_runtime *interpreter = gem_x64_runtime_create(interpreter_memory, &interpreter_config);
+    gem_x64_runtime *jit = gem_x64_runtime_create(jit_memory, &jit_config);
+    assert(interpreter);
+#if !defined(__aarch64__)
+    assert(!jit);
+    gem_x64_runtime_destroy(interpreter);
+    gem_memory_destroy(jit_memory);
+    gem_memory_destroy(interpreter_memory);
+    return;
+#else
+    assert(jit);
+    assert(strcmp(gem_x64_runtime_engine_name(interpreter), "Blink interpreter") == 0);
+    assert(strcmp(gem_x64_runtime_engine_name(jit), "Blink JIT") == 0);
+
+    gem_x64_jit_info interpreter_info{};
+    gem_x64_jit_info jit_info{};
+    assert(gem_x64_runtime_jit_info(interpreter, &interpreter_info));
+    assert(interpreter_info.engine_mode == GEM_X64_ENGINE_INTERPRETER);
+    assert(interpreter_info.cache_capacity_bytes == 0);
+    assert(gem_x64_runtime_jit_info(jit, &jit_info));
+    assert(jit_info.engine_mode == GEM_X64_ENGINE_JIT);
+    assert(jit_info.host_architecture == GEM_X64_HOST_AARCH64);
+    assert(jit_info.cache_capacity_bytes == GEM_X64_JIT_CACHE_CAPACITY_BYTES);
+
+    gem_thread_context zero_budget{};
+    init(zero_budget);
+    assert(gem_x64_runtime_run(jit, &zero_budget, 0) == GEM_STOP_BUDGET_EXPIRED);
+    assert(zero_budget.pc == CODE);
+    assert(gem_x64_runtime_jit_info(jit, &jit_info));
+    assert(jit_info.paths_generated == 0 && jit_info.paths_executed == 0);
+
+    gem_thread_context interpreted{};
+    gem_thread_context compiled{};
+    init(interpreted);
+    init(compiled);
+    assert(gem_x64_runtime_run(interpreter, &interpreted, 1) == GEM_STOP_BUDGET_EXPIRED);
+    assert(gem_x64_runtime_run(jit, &compiled, 1) == GEM_STOP_BUDGET_EXPIRED);
+    assert(!memcmp(&interpreted, &compiled, sizeof(interpreted)));
+    assert(gem_x64_runtime_jit_info(jit, &jit_info));
+    assert(jit_info.paths_generated >= 1 && jit_info.paths_executed == 0);
+
+    init(compiled);
+    assert(gem_x64_runtime_run(jit, &compiled, 1) == GEM_STOP_BUDGET_EXPIRED);
+    assert(!memcmp(&interpreted, &compiled, sizeof(interpreted)));
+    assert(gem_x64_runtime_jit_info(jit, &jit_info));
+    assert(jit_info.paths_executed >= 1);
+    const uint64_t generated_before_invalidation = jit_info.paths_generated;
+    const uint64_t invalidations_before = jit_info.invalidations;
+    gem_x64_runtime_invalidate_code(jit, CODE, sizeof(instruction));
+    assert(gem_x64_runtime_jit_info(jit, &jit_info));
+    assert(jit_info.invalidations == invalidations_before + 1);
+    init(compiled);
+    assert(gem_x64_runtime_run(jit, &compiled, 1) == GEM_STOP_BUDGET_EXPIRED);
+    assert(!memcmp(&interpreted, &compiled, sizeof(interpreted)));
+    assert(gem_x64_runtime_jit_info(jit, &jit_info));
+    assert(jit_info.paths_generated > generated_before_invalidation);
+
+    /* Identical checked-memory streams must reconcile to the same canonical
+     * CPU and memory state in both modes. */
+    const uint8_t load_store[] = {0x48, 0x8b, 0x03, 0x48, 0x89, 0x43, 0x08};
+    const uint64_t input = UINT64_C(0x8877665544332211);
+    for (gem_memory *memory : {interpreter_memory, jit_memory}) {
+        assert(gem_memory_write(memory, CODE, load_store, sizeof(load_store)) == GEM_MEMORY_OK);
+        assert(gem_memory_write(memory, DATA, &input, sizeof(input)) == GEM_MEMORY_OK);
+    }
+    gem_x64_runtime_invalidate_code(interpreter, CODE, sizeof(load_store));
+    gem_x64_runtime_invalidate_code(jit, CODE, sizeof(load_store));
+    init(interpreted);
+    init(compiled);
+    interpreted.x[27] = DATA;
+    compiled.x[27] = DATA;
+    assert(gem_x64_runtime_run(interpreter, &interpreted, 1) == GEM_STOP_BUDGET_EXPIRED);
+    assert(gem_x64_runtime_run(interpreter, &interpreted, 1) == GEM_STOP_BUDGET_EXPIRED);
+    assert(gem_x64_runtime_run(jit, &compiled, 1) == GEM_STOP_BUDGET_EXPIRED);
+    assert(gem_x64_runtime_run(jit, &compiled, 1) == GEM_STOP_BUDGET_EXPIRED);
+    assert(!memcmp(&interpreted, &compiled, sizeof(interpreted)));
+    uint64_t interpreted_output = 0;
+    uint64_t compiled_output = 0;
+    assert(gem_memory_read(interpreter_memory, DATA + 8, &interpreted_output,
+                           sizeof(interpreted_output)) == GEM_MEMORY_OK);
+    assert(gem_memory_read(jit_memory, DATA + 8, &compiled_output, sizeof(compiled_output)) ==
+           GEM_MEMORY_OK);
+    assert(interpreted_output == input && compiled_output == interpreted_output);
+
+    /* Fault and unsupported outcomes must be identical and transactional. */
+    const uint8_t unsupported = 0x50;
+    for (gem_memory *memory : {interpreter_memory, jit_memory})
+        assert(gem_memory_write(memory, CODE, &unsupported, sizeof(unsupported)) == GEM_MEMORY_OK);
+    gem_x64_runtime_invalidate_code(interpreter, CODE, 1);
+    gem_x64_runtime_invalidate_code(jit, CODE, 1);
+    init(interpreted);
+    init(compiled);
+    assert(gem_x64_runtime_run(interpreter, &interpreted, 1) == GEM_STOP_UNSUPPORTED_INSTRUCTION);
+    assert(gem_x64_runtime_run(jit, &compiled, 1) == GEM_STOP_UNSUPPORTED_INSTRUCTION);
+    assert(!memcmp(&interpreted, &compiled, sizeof(interpreted)));
+    gem_x64_stop_info interpreted_stop{};
+    gem_x64_stop_info compiled_stop{};
+    assert(gem_x64_runtime_last_stop_info(interpreter, &interpreted_stop));
+    assert(gem_x64_runtime_last_stop_info(jit, &compiled_stop));
+    assert(same_stop(interpreted_stop, compiled_stop));
+
+    const uint8_t load[] = {0x48, 0x8b, 0x03};
+    for (gem_memory *memory : {interpreter_memory, jit_memory})
+        assert(gem_memory_write(memory, CODE, load, sizeof(load)) == GEM_MEMORY_OK);
+    gem_x64_runtime_invalidate_code(interpreter, CODE, sizeof(load));
+    gem_x64_runtime_invalidate_code(jit, CODE, sizeof(load));
+    init(interpreted);
+    init(compiled);
+    interpreted.x[27] = compiled.x[27] = UINT64_C(0x0000800000000000);
+    assert(gem_x64_runtime_run(interpreter, &interpreted, 1) == GEM_STOP_MEMORY_FAULT);
+    assert(gem_x64_runtime_run(jit, &compiled, 1) == GEM_STOP_MEMORY_FAULT);
+    assert(!memcmp(&interpreted, &compiled, sizeof(interpreted)));
+    assert(gem_x64_runtime_last_stop_info(interpreter, &interpreted_stop));
+    assert(gem_x64_runtime_last_stop_info(jit, &compiled_stop));
+    assert(same_stop(interpreted_stop, compiled_stop));
+
+    /* A stale compiled path must never survive an explicit code write. */
+    uint8_t changed_instruction[sizeof(instruction)];
+    memcpy(changed_instruction, instruction, sizeof(instruction));
+    changed_instruction[2] = 0x2b;
+    assert(gem_memory_write(jit_memory, CODE, changed_instruction, sizeof(changed_instruction)) ==
+           GEM_MEMORY_OK);
+    gem_x64_runtime_invalidate_code(jit, CODE, sizeof(changed_instruction));
+    init(compiled);
+    assert(gem_x64_runtime_run(jit, &compiled, 1) == GEM_STOP_BUDGET_EXPIRED);
+    assert(compiled.x[8] == 0x2b);
+
+    /* Reuse the same compiled instruction enough times to exercise bounded
+     * cache reuse and teardown under stress without expanding the cache. */
+    for (unsigned repetition = 0; repetition < 1000; ++repetition) {
+        init(compiled);
+        assert(gem_x64_runtime_run(jit, &compiled, 1) == GEM_STOP_BUDGET_EXPIRED);
+        assert(compiled.x[8] == 0x2b);
+    }
+    assert(gem_x64_runtime_jit_info(jit, &jit_info));
+    assert(jit_info.cache_capacity_bytes == GEM_X64_JIT_CACHE_CAPACITY_BYTES);
+
+    gem_memory *peer_memory = gem_memory_create();
+    assert(peer_memory);
+    map(peer_memory, CODE, 4096, GEM_PAGE_EXECUTE_READWRITE);
+    map(peer_memory, STACK, 4096, GEM_PAGE_READWRITE);
+    assert(gem_memory_write(peer_memory, CODE, changed_instruction, sizeof(changed_instruction)) ==
+           GEM_MEMORY_OK);
+    gem_x64_runtime *peer = gem_x64_runtime_create(peer_memory, &jit_config);
+    assert(peer);
+    std::atomic<bool> concurrent_ok{true};
+    auto exercise = [&concurrent_ok](gem_x64_runtime *runtime) {
+        for (unsigned repetition = 0; repetition < 250; ++repetition) {
+            gem_thread_context context{};
+            init(context);
+            if (gem_x64_runtime_run(runtime, &context, 1) != GEM_STOP_BUDGET_EXPIRED ||
+                context.x[8] != 0x2b) {
+                concurrent_ok.store(false);
+                return;
+            }
+        }
+    };
+    std::thread first(exercise, jit);
+    std::thread second(exercise, peer);
+    first.join();
+    second.join();
+    assert(concurrent_ok.load());
+    gem_x64_runtime_destroy(peer);
+    gem_memory_destroy(peer_memory);
+
+    gem_x64_runtime_config invalid = jit_config;
+    invalid.max_jit_cache_bytes--;
+    assert(gem_x64_runtime_create(jit_memory, &invalid) == nullptr);
+    invalid = interpreter_config;
+    invalid.max_jit_cache_bytes = 1;
+    assert(gem_x64_runtime_create(interpreter_memory, &invalid) == nullptr);
+    gem_x64_runtime_destroy(jit);
+    gem_x64_runtime_destroy(interpreter);
+    gem_memory_destroy(jit_memory);
+    gem_memory_destroy(interpreter_memory);
+#endif
+}
 int main() {
     static_assert(sizeof(gem_thread_context) == 720);
     test_embedding_abi();
+    test_explicit_jit_mode();
     gem_memory *m = gem_memory_create();
     assert(m);
     assert(gem_x64_runtime_create(nullptr, nullptr) == nullptr);
@@ -89,10 +295,9 @@ int main() {
     cfg.max_budget = 100;
     gem_x64_runtime *r = gem_x64_runtime_create(m, &cfg);
     assert(r);
-    assert(
-        strstr(gem_x64_runtime_engine_provenance(r),
-               "patch-sha256=36774371e862c7a44775b19d16b130c23ab0beccf223d755b0321225c7fbfd03") !=
-        nullptr);
+    assert(strstr(gem_x64_runtime_engine_provenance(r),
+                  "patch-sha256=36774371e862c7a44775b19d16b130c23ab0beccf223d755b0321225c7fbfd03,"
+                  "560648510b5d3b5e0feb5e9462fb1534d652422f15cf69e14662a276fd96d396") != nullptr);
     gem_thread_context c{};
     init(c);
     uint8_t nop = 0x90;
