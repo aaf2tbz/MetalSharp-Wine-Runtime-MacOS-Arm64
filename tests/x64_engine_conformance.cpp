@@ -187,7 +187,7 @@ static void test_explicit_jit_mode() {
     assert(interpreted_output == input && compiled_output == interpreted_output);
 
     /* Fault and unsupported outcomes must be identical and transactional. */
-    const uint8_t unsupported = 0x5e;
+    const uint8_t unsupported = 0x9c; /* PUSHFQ remains outside the reviewed set. */
     for (gem_memory *memory : {interpreter_memory, jit_memory})
         assert(gem_memory_write(memory, CODE, &unsupported, sizeof(unsupported)) == GEM_MEMORY_OK);
     gem_x64_runtime_invalidate_code(interpreter, CODE, 1);
@@ -304,7 +304,7 @@ int main() {
     gem_x64_runtime *r = gem_x64_runtime_create(m, &cfg);
     assert(r);
     assert(strstr(gem_x64_runtime_engine_provenance(r),
-                  "patch-sha256=36774371e862c7a44775b19d16b130c23ab0beccf223d755b0321225c7fbfd03,"
+                  "patch-sha256=2e4be43984e2eef5d2b52186cbedd18384004727d362c5f6fa6fe7d64d71fd6a,"
                   "560648510b5d3b5e0feb5e9462fb1534d652422f15cf69e14662a276fd96d396") != nullptr);
     gem_thread_context c{};
     init(c);
@@ -336,10 +336,9 @@ int main() {
     uint64_t out = 0;
     assert(gem_memory_read(m, DATA + 8, &out, 8) == GEM_MEMORY_OK && out == value);
 
-    /* Pinned Blink's established opcode table decodes 0x58 as OpPopZvq.
-     * POP remains intentionally absent from the reviewed handler manifest. */
-    const uint8_t pop_rax = 0x58;
-    assert(gem_memory_write(m, CODE, &pop_rax, 1) == GEM_MEMORY_OK);
+    /* PUSHFQ is not part of the reviewed ordinary-register stack subset. */
+    const uint8_t pushfq = 0x9c;
+    assert(gem_memory_write(m, CODE, &pushfq, 1) == GEM_MEMORY_OK);
     init(c);
     uint8_t stack_before[8]{};
     assert(gem_memory_read(m, c.sp - 8, stack_before, sizeof(stack_before)) == GEM_MEMORY_OK);
@@ -545,7 +544,7 @@ int main() {
                trace_id == BLINK_GEM_HANDLER_OP_MOV_GVQP_EVQP && trace_rip == CODE);
 
         gem_x64_runtime_handler_trace_reset(r);
-        assert(gem_memory_write(m, CODE, &pop_rax, 1) == GEM_MEMORY_OK);
+        assert(gem_memory_write(m, CODE, &pushfq, 1) == GEM_MEMORY_OK);
         init(c);
         assert(gem_x64_runtime_run(r, &c, 1) == GEM_STOP_UNSUPPORTED_INSTRUCTION);
         assert(gem_x64_runtime_handler_trace_info(r, &trace_count, &trace_overflow) &&
@@ -797,6 +796,44 @@ int main() {
         assert(gem_x64_runtime_decode_attempt_info(r, &attempt));
         assert(attempt.valid && attempt.mopcode == 0x056U && attempt.handler_id == 0U &&
                !strcmp(attempt.name, "OpPushZvq"));
+
+        /* Ordinary PE32+ epilogues restore RSI with long-mode POP r64. The
+         * accepted form loads exactly eight bytes and advances RSP without
+         * changing flags, SIMD, x87, or unrelated general registers. */
+        const uint8_t pop_rsi[] = {0x5e};
+        assert(gem_memory_write(m, CODE, pop_rsi, sizeof(pop_rsi)) == GEM_MEMORY_OK);
+        init(c);
+        const uint64_t restored_rsi = UINT64_C(0x8877665544332211);
+        assert(gem_memory_write(m, c.sp, &restored_rsi, sizeof(restored_rsi)) == GEM_MEMORY_OK);
+        const auto pop_before = c;
+        assert(gem_x64_runtime_run(r, &c, 1) == GEM_STOP_BUDGET_EXPIRED);
+        assert(c.pc == CODE + sizeof(pop_rsi) && c.sp == pop_before.sp + sizeof(restored_rsi) &&
+               c.x[25] == restored_rsi &&
+               (c.x64_rflags & UINT64_C(0x8d5)) == (pop_before.x64_rflags & UINT64_C(0x8d5)) &&
+               c.x64_mxcsr == pop_before.x64_mxcsr && c.x64_fcw == pop_before.x64_fcw &&
+               c.x64_fsw == pop_before.x64_fsw && !memcmp(c.v, pop_before.v, sizeof(c.v)) &&
+               !memcmp(c.x87, pop_before.x87, sizeof(c.x87)));
+        for (size_t i = 0; i < std::size(c.x); ++i)
+            if (i != 25U)
+                assert(c.x[i] == pop_before.x[i]);
+        assert(gem_x64_runtime_decode_attempt_info(r, &attempt));
+        assert(attempt.valid && attempt.mopcode == 0x05eU &&
+               attempt.handler_id == BLINK_GEM_HANDLER_OP_POP_ZVQ &&
+               !strcmp(attempt.name, "OpPopZvq"));
+
+        /* Operand-size-overridden POP remains outside the long-mode r64
+         * contract and must leave the complete context unchanged. */
+        const uint8_t pop_rsi_16[] = {0x66, 0x5e};
+        assert(gem_memory_write(m, CODE, pop_rsi_16, sizeof(pop_rsi_16)) == GEM_MEMORY_OK);
+        init(c);
+        const auto rejected_pop = c;
+        assert(gem_x64_runtime_run(r, &c, 1) == GEM_STOP_UNSUPPORTED_INSTRUCTION);
+        auto rejected_pop_expected = rejected_pop;
+        rejected_pop_expected.stop_reason = GEM_STOP_UNSUPPORTED_INSTRUCTION;
+        assert(!memcmp(&c, &rejected_pop_expected, sizeof(c)));
+        assert(gem_x64_runtime_decode_attempt_info(r, &attempt));
+        assert(attempt.valid && attempt.mopcode == 0x05eU && attempt.handler_id == 0U &&
+               !strcmp(attempt.name, "OpPopZvq"));
 
         /* 16-bit width and memory ModR/M remain outside the narrow rule. */
         const std::array<std::array<uint8_t, 3>, 2> rejected_adds = {

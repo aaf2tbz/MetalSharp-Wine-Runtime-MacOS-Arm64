@@ -3,7 +3,7 @@ new file mode 100644
 index 0000000000000000000000000000000000000000..a189ec0b8241e1a7a5a6ac373257931130a5529c
 --- /dev/null
 +++ b/blink/gem_embed.c
-@@ -0,0 +1,435 @@
+@@ -0,0 +1,436 @@
 +/*
 + * Copyright 2022 Justine Alexandra Roberts Tunney
 + * Copyright 2026 MetalSharp Wine Runtime contributors
@@ -423,6 +423,7 @@ index 0000000000000000000000000000000000000000..a189ec0b8241e1a7a5a6ac3732579311
 +    case BLINK_GEM_HANDLER_OP_MOVSL_GDQP_ED: return "OpMovslGdqpEd";
 +    case BLINK_GEM_HANDLER_OP_NOP_EV: return "OpNopEv";
 +    case BLINK_GEM_HANDLER_OP_PUSH_ZVQ: return "OpPushZvq";
++    case BLINK_GEM_HANDLER_OP_POP_ZVQ: return "OpPopZvq";
 +    default: return "OpUnknown";
 +  }
 +}
@@ -444,7 +445,7 @@ new file mode 100644
 index 0000000000000000000000000000000000000000..af211c039ab55dee67f561bada7a61eed64d2002
 --- /dev/null
 +++ b/blink/gem_embed.h
-@@ -0,0 +1,165 @@
+@@ -0,0 +1,166 @@
 +/*
 + * Copyright 2022 Justine Alexandra Roberts Tunney
 + * Copyright 2026 MetalSharp Wine Runtime contributors
@@ -501,7 +502,8 @@ index 0000000000000000000000000000000000000000..af211c039ab55dee67f561bada7a61ee
 +  BLINK_GEM_HANDLER_OP_ALU_TEST = 17,
 +  BLINK_GEM_HANDLER_OP_MOVSL_GDQP_ED = 18,
 +  BLINK_GEM_HANDLER_OP_NOP_EV = 19,
-+  BLINK_GEM_HANDLER_OP_PUSH_ZVQ = 20
++  BLINK_GEM_HANDLER_OP_PUSH_ZVQ = 20,
++  BLINK_GEM_HANDLER_OP_POP_ZVQ = 21
 +};
 +struct blink_gem_trace_entry {
 +  uint64_t rip;
@@ -614,7 +616,7 @@ diff --git a/blink/machine.c b/blink/machine.c
 index ad309eb2b837423ba31dec2f8db30b94edfa502d..7cc92e0851551b734901cbf98e255470be468ab9 100644
 --- a/blink/machine.c
 +++ b/blink/machine.c
-@@ -2092,0 +2093,62 @@ nexgen32e_f GetOp(long op) {
+@@ -2092,0 +2093,67 @@ nexgen32e_f GetOp(long op) {
 +int GemHandlerId(nexgen32e_f handler, long rde) {
 +  if (handler == OpNop) return 1;
 +  if (handler == OpMovZvqpIvqp) return 2;
@@ -670,6 +672,11 @@ index ad309eb2b837423ba31dec2f8db30b94edfa502d..7cc92e0851551b734901cbf98e255470
 +  if (handler == OpPushZvq && Mopcode(rde) >= 0x050 &&
 +      Mopcode(rde) <= 0x057 && !Osz(rde) && Mode(rde) == XED_MODE_LONG)
 +    return 20;
++  /* Match PUSH's reviewed inverse for ordinary PE32+ epilogues: POP r64 in
++   * long mode only, with no operand-size override or legacy stack width. */
++  if (handler == OpPopZvq && Mopcode(rde) >= 0x058 &&
++      Mopcode(rde) <= 0x05f && !Osz(rde) && Mode(rde) == XED_MODE_LONG)
++    return 21;
 +  return 0;
 +}
 +

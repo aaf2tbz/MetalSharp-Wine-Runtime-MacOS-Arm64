@@ -2,7 +2,7 @@
 
 This ISC patch applies only to Blink `f006a4fc6f9b8de9272504fdff0dbbe5ce5dc580` from the
 SHA-256 verified upstream archive. The ordered patch SHA-256 values are
-`36774371e862c7a44775b19d16b130c23ab0beccf223d755b0321225c7fbfd03` and
+`2e4be43984e2eef5d2b52186cbedd18384004727d362c5f6fa6fe7d64d71fd6a` and
 `560648510b5d3b5e0feb5e9462fb1534d652422f15cf69e14662a276fd96d396`. They add an opaque
 bounded step API around Blink's existing `NewSystem`/`NewMachine`, `LoadInstruction`, decoded `GetOp` handler selection, and
 `ExecuteInstruction`/`JitlessDispatch`. It does not contain a decoder or opcode parser.

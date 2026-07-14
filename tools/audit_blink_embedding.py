@@ -29,6 +29,7 @@ APPROVED_HANDLER_DEFINITIONS = UNRESTRICTED_HANDLERS + (
     "OpMovslGdqpEd",
     "OpNopEv",
     "OpPushZvq",
+    "OpPopZvq",
 )
 TRACE_IDENTITIES = UNRESTRICTED_HANDLERS + (
     "OpAluFlip",
@@ -40,6 +41,7 @@ TRACE_IDENTITIES = UNRESTRICTED_HANDLERS + (
     "OpMovslGdqpEd",
     "OpNopEv",
     "OpPushZvq",
+    "OpPopZvq",
 )
 
 
@@ -115,7 +117,7 @@ def audit_handlers(source_root, provenance, machine_text):
 def audit_trace(provenance, machine_text, embedding_text, embedding_header):
     # The decoder-owned handler identity is the single authority for both the
     # allowlist decision and the diagnostic trace id.  GemHandlerId maps the
-    # exact Blink handler pointer to a stable 1..20 id. Shared/group handlers
+    # exact Blink handler pointer to a stable 1..21 id. Shared/group handlers
     # may be
     # narrowed by Blink's already-decoded mopcode; no byte decoder is added.
     mapped = tuple(
@@ -143,7 +145,7 @@ def audit_trace(provenance, machine_text, embedding_text, embedding_header):
         for value in re.findall(r"return (\d+);", gem_handler_id.group(1))
         if value != "0"
     )
-    need(returned_ids == tuple(range(1, 21)), "GemHandlerId numbering/coverage drift")
+    need(returned_ids == tuple(range(1, 22)), "GemHandlerId numbering/coverage drift")
     restricted = provenance["handlerTrace"]["restrictions"]
     need(
         restricted
@@ -164,6 +166,11 @@ def audit_trace(provenance, machine_text, embedding_text, embedding_header):
                 "id": 20,
                 "handler": "OpPushZvq",
                 "forms": "long-mode PUSH r64, opcodes 0x50..0x57",
+            },
+            {
+                "id": 21,
+                "handler": "OpPopZvq",
+                "forms": "long-mode POP r64, opcodes 0x58..0x5f",
             },
         ],
         "handler restriction provenance drift",

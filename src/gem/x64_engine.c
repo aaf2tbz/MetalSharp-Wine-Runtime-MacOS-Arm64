@@ -132,7 +132,7 @@ const char *gem_x64_runtime_engine_license(const struct gem_x64_runtime *r) {
 const char *gem_x64_runtime_engine_provenance(const struct gem_x64_runtime *r) {
     return r ? "jart/blink@f006a4fc6f9b8de9272504fdff0dbbe5ce5dc580;explicit-interpreter-or-"
                "single-instruction-jit;bounded-cache;process-serialized;patch-sha256="
-               "36774371e862c7a44775b19d16b130c23ab0beccf223d755b0321225c7fbfd03,"
+               "2e4be43984e2eef5d2b52186cbedd18384004727d362c5f6fa6fe7d64d71fd6a,"
                "560648510b5d3b5e0feb5e9462fb1534d652422f15cf69e14662a276fd96d396"
              : "unavailable";
 }
