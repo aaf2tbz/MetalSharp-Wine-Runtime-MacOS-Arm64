@@ -100,7 +100,10 @@ print(json.load(open(sys.argv[1], encoding="utf-8"))["build_dependencies"]["exte
 PY
 )
 [[ "$vulkan_hash" == "$expected_vulkan_hash" && "$moltenvk_hash" == "$expected_moltenvk_hash" ]] || {
-    echo "external Vulkan runtime hash does not match components.lock.json" >&2; exit 1;
+    echo "external Vulkan runtime hash does not match components.lock.json" >&2
+    echo "vulkan-loader expected=$expected_vulkan_hash actual=$vulkan_hash" >&2
+    echo "MoltenVK expected=$expected_moltenvk_hash actual=$moltenvk_hash" >&2
+    exit 1
 }
 
 pkg_config_path=()
