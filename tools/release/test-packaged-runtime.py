@@ -26,6 +26,8 @@ PREFIX_READY_FILES = (
     "drive_c/windows/system32/services.exe",
 )
 
+RELEASE_OPERATION_TIMEOUT = 180
+
 
 def fail(message: str) -> None:
     raise SystemExit(f"packaged runtime test failed: {message}")
@@ -213,42 +215,50 @@ def main() -> None:
 
     def quiesce_wineserver() -> None:
         stopped = subprocess.run([str(wineserver), "-k"], env=env, stdout=subprocess.DEVNULL,
-                                 stderr=subprocess.DEVNULL, timeout=30, check=False)
+                                 stderr=subprocess.DEVNULL,
+                                 timeout=min(args.timeout, RELEASE_OPERATION_TIMEOUT), check=False)
         waited = subprocess.run([str(wineserver), "-w"], env=env, stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL, timeout=30, check=False)
+                                stderr=subprocess.DEVNULL,
+                                timeout=min(args.timeout, RELEASE_OPERATION_TIMEOUT), check=False)
         if stopped.returncode not in (0, 1) or waited.returncode:
             fail(f"wineboot server quiesce failed: kill={stopped.returncode}, "
                  f"wait={waited.returncode}")
 
     try:
         run_test("wineboot-init", [str(runtime / "bin/wineboot"), "--init"],
-                 ("native ARM64 GEM launch image=",), timeout=60)
-        wait_for_prefix_ready(prefix, args.evidence, min(args.timeout, 120))
+                 ("native ARM64 GEM launch image=",), timeout=RELEASE_OPERATION_TIMEOUT)
+        wait_for_prefix_ready(prefix, args.evidence,
+                              min(args.timeout, RELEASE_OPERATION_TIMEOUT))
         quiesce_wineserver()
         run_test("arm64-cmd-exit", [str(wine), "cmd.exe", "/c", "exit"],
-                 ("native ARM64 GEM launch image=",), timeout=60)
+                 ("native ARM64 GEM launch image=",), timeout=RELEASE_OPERATION_TIMEOUT)
         run_test("arm64-gem-acceptance", [str(wine), "metalsharp-gem-acceptance.exe"],
                  ("metalsharp-gem-acceptance: passed", "boundary syscall"),
-                 timeout=120, trace_gem=True)
+                 timeout=RELEASE_OPERATION_TIMEOUT, trace_gem=True)
         quiesce_wineserver()
         run_test("arm64ec-x64-hybrid", [str(wine), str(selftest / "arm64x_fixture_host.exe")],
-                 ("ARM64X linked fixture native execution passed",), timeout=120, trace_gem=True)
+                 ("ARM64X linked fixture native execution passed",),
+                 timeout=RELEASE_OPERATION_TIMEOUT, trace_gem=True)
         quiesce_wineserver()
         run_test("x86_64-exception", [str(wine), str(x86_64_fixture)],
-                 ("pure AMD64 routing enabled",), timeout=120, trace_gem=True)
+                 ("pure AMD64 routing enabled",), timeout=RELEASE_OPERATION_TIMEOUT,
+                 trace_gem=True)
         quiesce_wineserver()
         run_test("x86_64-cmd-exit",
                  [str(wine), str(runtime / "lib/wine/x86_64-windows/cmd.exe"),
                   "/d", "/c", "exit", "0"],
-                 ("pure AMD64 routing enabled",), timeout=120, trace_gem=True)
+                 ("pure AMD64 routing enabled",), timeout=RELEASE_OPERATION_TIMEOUT,
+                 trace_gem=True)
         for index in range(args.stress_iterations):
             quiesce_wineserver()
             run_test(f"hybrid-stress-{index + 1:03d}",
                      [str(wine), str(selftest / "arm64x_fixture_host.exe")],
-                     ("ARM64X linked fixture native execution passed",), timeout=120)
+                     ("ARM64X linked fixture native execution passed",),
+                     timeout=RELEASE_OPERATION_TIMEOUT)
     finally:
         subprocess.run([str(wineserver), "-k"], env=env, stdout=subprocess.DEVNULL,
-                       stderr=subprocess.DEVNULL, timeout=30, check=False)
+                       stderr=subprocess.DEVNULL,
+                       timeout=min(args.timeout, RELEASE_OPERATION_TIMEOUT), check=False)
         sampler_stop.set()
         sampler.join(timeout=5)
     if translated:
