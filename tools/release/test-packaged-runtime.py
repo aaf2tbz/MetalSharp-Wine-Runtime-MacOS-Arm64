@@ -173,12 +173,14 @@ def main() -> None:
     results: list[dict[str, object]] = []
 
     def run_test(name: str, command: list[str], expected: tuple[str, ...] = (),
-                 timeout: int | None = None, trace_gem: bool = False) -> None:
+                 timeout: int | None = None, trace_gem: bool = False,
+                 wine_debug: str | None = None) -> None:
         log = args.evidence / f"{name}.log"
         started = time.monotonic()
         timeout = args.timeout if timeout is None else min(args.timeout, timeout)
         run_env = env.copy()
-        run_env["WINEDEBUG"] = "+gem,-all" if trace_gem else "-all"
+        run_env["WINEDEBUG"] = (wine_debug if wine_debug is not None else
+                                "+gem,-all" if trace_gem else "-all")
         with log.open("w", encoding="utf-8") as output:
             process = subprocess.Popen(command, cwd=selftest, env=run_env, stdout=output,
                                        stderr=subprocess.STDOUT, start_new_session=True)
@@ -242,7 +244,7 @@ def main() -> None:
         quiesce_wineserver()
         run_test("x86_64-exception", [str(wine), str(x86_64_fixture)],
                  ("pure AMD64 routing enabled",), timeout=RELEASE_OPERATION_TIMEOUT,
-                 trace_gem=True)
+                 wine_debug="-all,+gem,+module,+loaddll,+process,+seh")
         quiesce_wineserver()
         run_test("x86_64-cmd-exit",
                  [str(wine), str(runtime / "lib/wine/x86_64-windows/cmd.exe"),
