@@ -35,6 +35,25 @@ def digest(path: Path) -> str:
     return digest_bytes(path.read_bytes())
 
 
+def read_patch(patch_root: Path, value: object, runtime_path: str) -> bytes:
+    names = value if isinstance(value, list) else [value]
+    if not names:
+        fail(f"runtime patch has no parts: {runtime_path}")
+    parts: list[bytes] = []
+    seen: set[str] = set()
+    for value_part in names:
+        patch_name = safe_relative(value_part)
+        flat_name = patch_name.as_posix()
+        if len(patch_name.parts) != 1 or flat_name in seen:
+            fail(f"patch filename is not unique and flat: {patch_name}")
+        seen.add(flat_name)
+        patch = patch_root / patch_name
+        if patch.is_symlink() or not patch.is_file():
+            fail(f"runtime patch is missing: {runtime_path}")
+        parts.append(patch.read_bytes())
+    return b"".join(parts)
+
+
 def number(value: bytes) -> int:
     if len(value) != 8:
         fail("truncated BSDIFF40 integer")
@@ -141,12 +160,7 @@ def main() -> None:
             fail(f"runtime patch is duplicated or not policy-approved: {name}")
         seen.add(name)
         source = runtime / relative
-        patch_name = safe_relative(record["patch"])
-        if len(patch_name.parts) != 1:
-            fail(f"patch filename is not flat: {patch_name}")
-        patch = patch_root / patch_name
-        if patch.is_symlink() or not patch.is_file():
-            fail(f"runtime patch is missing: {name}")
+        patch_bytes = read_patch(patch_root, record["patch"], name)
         if action == "replace":
             if source.is_symlink() or not source.is_file():
                 fail(f"runtime source is missing: {name}")
@@ -155,9 +169,10 @@ def main() -> None:
             if source.exists() or record["baseSha256"] != digest_bytes(b""):
                 fail(f"added runtime path exists in the foundation: {name}")
             source_bytes = b""
-        if digest_bytes(source_bytes) != record["baseSha256"] or digest(patch) != record["patchSha256"]:
+        if digest_bytes(source_bytes) != record["baseSha256"] or \
+                digest_bytes(patch_bytes) != record["patchSha256"]:
             fail(f"base or patch hash mismatch: {name}")
-        patched = apply_bsdiff(source_bytes, patch.read_bytes())
+        patched = apply_bsdiff(source_bytes, patch_bytes)
         if len(patched) != record["resultSize"] or digest_bytes(patched) != record["resultSha256"]:
             fail(f"patched output identity mismatch: {name}")
         destination = args.output / relative

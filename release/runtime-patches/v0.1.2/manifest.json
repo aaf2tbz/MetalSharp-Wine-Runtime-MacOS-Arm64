@@ -74,7 +74,12 @@
     {
       "path": "lib/wine/aarch64-unix/winemetal.so",
       "action": "add",
-      "patch": "lib_wine_aarch64-unix_winemetal_so.bsdiff",
+      "patch": [
+        "lib_wine_aarch64-unix_winemetal_so.bsdiff.part00",
+        "lib_wine_aarch64-unix_winemetal_so.bsdiff.part01",
+        "lib_wine_aarch64-unix_winemetal_so.bsdiff.part02",
+        "lib_wine_aarch64-unix_winemetal_so.bsdiff.part03"
+      ],
       "patchSha256": "1d5dccb341fd9fd7bf54e4039164d0b185fd86af041dea3d1c1dc288bed13a60",
       "baseSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "resultSha256": "c069252f4147f20ca3d2be73b7233e656c5b1872bcf8c93c4aedde4a7e44637f",
