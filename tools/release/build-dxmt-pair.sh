@@ -160,7 +160,8 @@ manifest.update({
         "patches": dxmt["patches"],
     },
     "toolchain": {
-        "xcode": sys.argv[4], "metal": sys.argv[5],
+        "xcode": sys.argv[4].replace("\n", " / "),
+        "metal": sys.argv[5].splitlines()[0],
         "meson": sys.argv[6], "ninja": sys.argv[7],
     },
     "reproducibility": {

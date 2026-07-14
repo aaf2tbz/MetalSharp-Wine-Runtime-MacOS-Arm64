@@ -236,7 +236,7 @@ PY
 cmake --install "$gem_build" --prefix "$prefix" --component metalsharp-gem-wine
 runtime_dir="$prefix/lib/wine/aarch64-unix"
 acceptance_exe="$prefix/lib/wine/aarch64-windows/metalsharp-gem-acceptance.exe"
-i386_acceptance_exe="$prefix/lib/wine/i386-windows/metalsharp-gem-i386-acceptance.exe"
+i386_acceptance_exe="$prefix/lib/wine/i386-windows/sharpwine-i386-acceptance.exe"
 "$llvm_mingw/bin/aarch64-w64-mingw32-clang" -O2 -Wall -Wextra -Werror \
     -Wl,--no-insert-timestamp -Wl,--subsystem,console \
     "$root/tests/fixtures/wine_arm64_gem_acceptance.c" -o "$acceptance_exe"
@@ -436,7 +436,7 @@ try:
         120, trace_gem=True)
     i386_acceptance_log = run(
         "gem-i386-acceptance", [str(prefix / "bin/wine"),
-                                 str(prefix / "lib/wine/i386-windows/metalsharp-gem-i386-acceptance.exe")],
+                                 str(prefix / "lib/wine/i386-windows/sharpwine-i386-acceptance.exe")],
         180, trace_gem=True)
     cmd_log = run("cmd", [str(prefix / "bin/wine"), "cmd.exe", "/c", "exit"], 60)
 finally:

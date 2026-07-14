@@ -10,7 +10,7 @@ bundle=
 llvm_mingw=${LLVM_MINGW:-}
 deps=${MSWR_DEPS_ROOT:-}
 jobs=${MSWR_JOBS:-$(sysctl -n hw.ncpu)}
-repository=${GITHUB_REPOSITORY:-aaf2tbz/MetalSharp-Wine-Runtime-MacOS-Arm64}
+repository=${GITHUB_REPOSITORY:-aaf2tbz/SharpWine}
 
 usage() {
     echo "usage: $0 --commit SHA --output DIR --arm64x-bundle DIR --llvm-mingw DIR --deps DIR [--jobs N]" >&2

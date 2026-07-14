@@ -92,17 +92,24 @@ diff --git a/dlls/ntdll/unix/thread.c b/dlls/ntdll/unix/thread.c
 index b08f2e1877..a5b9db57b6 100644
 --- a/dlls/ntdll/unix/thread.c
 +++ b/dlls/ntdll/unix/thread.c
-@@ -1201,7 +1201,16 @@ NTSTATUS init_thread_stack( TEB *teb, ULONG_PTR limit, SIZE_T reserve_size, SIZE
+@@ -1201,7 +1201,23 @@ NTSTATUS init_thread_stack( TEB *teb, ULONG_PTR limit, SIZE_T reserve_size, SIZE
 
          /* 32-bit stack */
          if (!limit || limit > user_space_wow_limit) limit = user_space_wow_limit;
 +#if defined(__APPLE__) && defined(__aarch64__)
-+        /* Keep the stack below the 2 GiB guest boundary even for large-address-
-+         * aware images.  A StackBase at exactly 4 GiB wraps to zero in TEB32. */
-+        if (limit > limit_2g) limit = limit_2g;
-+        if ((status = virtual_alloc_thread_stack( &stack, 0x10000000000ull,
-+                                                   0x10000000000ull + limit,
-+                                                   reserve_size, commit_size, TRUE )))
++        if (main_image_info.Machine == IMAGE_FILE_MACHINE_I386)
++        {
++            /* Keep the stack below the 2 GiB guest boundary even for large-address-
++             * aware images.  A StackBase at exactly 4 GiB wraps to zero in TEB32. */
++            if (limit > limit_2g) limit = limit_2g;
++            status = virtual_alloc_thread_stack( &stack, 0x10000000000ull,
++                                                  0x10000000000ull + limit,
++                                                  reserve_size, commit_size, TRUE );
++        }
++        else
++            status = virtual_alloc_thread_stack( &stack, 0, limit, reserve_size,
++                                                  commit_size, TRUE );
++        if (status)
 +#else
          if ((status = virtual_alloc_thread_stack( &stack, 0, limit, reserve_size, commit_size, TRUE )))
 +#endif
@@ -113,14 +120,15 @@ diff --git a/dlls/ntdll/unix/virtual.c b/dlls/ntdll/unix/virtual.c
 index 649f45f418..e952e9f4da 100644
 --- a/dlls/ntdll/unix/virtual.c
 +++ b/dlls/ntdll/unix/virtual.c
-@@ -219,6 +219,25 @@ static void **next_free_teb;
+@@ -219,6 +219,26 @@ static void **next_free_teb;
  static int teb_block_pos;
  static struct list teb_list = LIST_INIT( teb_list );
 
 +static inline BOOL use_i386_shadow(void)
 +{
 +#if defined(__APPLE__) && defined(__aarch64__)
-+    return is_wow64() && user_space_wow_limit;
++    return is_wow64() && user_space_wow_limit &&
++           main_image_info.Machine == IMAGE_FILE_MACHINE_I386;
 +#else
 +    return FALSE;
 +#endif

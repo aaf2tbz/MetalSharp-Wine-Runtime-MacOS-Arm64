@@ -108,7 +108,7 @@
         },
         {
           "path": "third_party/patches/wine/0014-ntdll-add-gem-backed-i386-wow64-execution-on-arm64.patch",
-          "sha256": "bab7372039c201c657291bf3561428ba5b38cb1c68ee2fc72b83bfb91c1c7aa6"
+          "sha256": "989610f9fb94798c712c36625448ef61f0e41b39ff35451c9125a095c78e25b3"
         }
       ]
     },
