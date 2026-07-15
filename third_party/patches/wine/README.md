@@ -107,6 +107,13 @@ is not a release input.
      successful instead of incorrectly falling back to `start.exe`;
    - prevents an ASLR-relocated `wineboot.exe` from causing a secondary
      `kernel32.dll` bootstrap failure.
+16. `0016-darwin-arm64-enable-synchronous-gui-callbacks.patch`
+   - preserves full-width syscall results and supports GUI syscalls with more
+     than sixteen arguments;
+   - completes translated user-mode callbacks synchronously and preserves
+     their restored continuations;
+   - uses a server-owned desktop without translated Explorer, loads
+     `winemac.drv` directly, and reads KUSER from its canonical high mapping.
 
 ## Current evidence and limitation
 
@@ -156,7 +163,9 @@ and MoltenVK binaries. The command also builds and stages the exact GEM bridge,
 verifies ntdll's direct versioned dependency, native launch ABI, and relocatable
 lookup path, audits every staged host Mach-O as ARM64-only, runs the bounded
 pre-guest lifecycle probe, and executes the full fresh-prefix
-`wineboot`/`cmd.exe` gate. The gate records the exact staged PE selected by the
+`wineboot`/`cmd.exe` gate. The staged runtime has additionally produced an
+on-screen native Cocoa window for ARM64X Notepad through GEM. The gate records
+the exact staged PE selected by the
 wrapper and rejects loader re-exec or `start.exe` fallback evidence. The
 resulting `wine-build-manifest.json` records those results, evidence hashes,
 configure flags, toolchain, dependency roots, installed files, and Mach-O audit

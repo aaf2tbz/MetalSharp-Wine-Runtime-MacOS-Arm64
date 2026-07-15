@@ -113,6 +113,10 @@
         {
           "path": "third_party/patches/wine/0015-ntdll-accept-relocated-initial-process-images.patch",
           "sha256": "9b5f93f617ba2ab08e6aa111094d44330d2094d2872d6cf7d35bb8e21984f982"
+        },
+        {
+          "path": "third_party/patches/wine/0016-darwin-arm64-enable-synchronous-gui-callbacks.patch",
+          "sha256": "a408cbf7a112a9538490827f613b3cf3c6b670e1e7fd075e156c5d7aedef324f"
         }
       ]
     },

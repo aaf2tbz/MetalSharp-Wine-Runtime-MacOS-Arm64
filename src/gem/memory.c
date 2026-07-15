@@ -28,11 +28,11 @@ struct page {
  * Per-`gem_memory` exclusive lock.  Every public operation that observes or
  * mutates page-table state holds this lock for its complete validation and
  * commit so each operation is linearizable with respect to other concurrent
- * callers of the same `gem_memory`.  The lock is deliberately non-recursive:
- * compound operations (identity mapping and its rollback) call internal
- * `*_locked` helpers while the lock is already held and never re-enter a public
- * locking wrapper.  Lock acquisition or release failure is fatal (fail-stop)
- * so the implementation never silently runs unsynchronized.
+ * callers of the same `gem_memory`.  On POSIX the owning thread may re-enter
+ * through Wine's synchronous protection-fault handler while a checked guest
+ * access is copying backing memory, so that lock must be recursive.  Lock
+ * acquisition or release failure is fatal (fail-stop) so the implementation
+ * never silently runs unsynchronized.
  */
 #if defined(_WIN32)
 typedef SRWLOCK gem_lock;
@@ -52,7 +52,14 @@ static void gem_lock_release(gem_lock *l) {
 #else
 typedef pthread_mutex_t gem_lock;
 static bool gem_lock_init(gem_lock *l) {
-    return pthread_mutex_init(l, NULL) == 0;
+    pthread_mutexattr_t attr;
+    bool ok;
+    if (pthread_mutexattr_init(&attr) != 0)
+        return false;
+    ok = pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE) == 0 &&
+         pthread_mutex_init(l, &attr) == 0;
+    (void)pthread_mutexattr_destroy(&attr);
+    return ok;
 }
 static void gem_lock_destroy(gem_lock *l) {
     (void)pthread_mutex_destroy(l);

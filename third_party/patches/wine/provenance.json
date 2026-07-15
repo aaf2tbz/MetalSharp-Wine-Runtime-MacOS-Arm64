@@ -111,6 +111,13 @@
       "sha256": "9b5f93f617ba2ab08e6aa111094d44330d2094d2872d6cf7d35bb8e21984f982",
       "authoringCommit": "f7fe3ef2f02761b6b9500ec20cae6590290474cd",
       "purpose": "Treat nonzero NT success statuses from initial executable mapping as successful so ASLR-relocated wineboot images do not incorrectly fall back to start.exe and trigger a secondary kernel32 bootstrap failure."
+    },
+    {
+      "order": 16,
+      "path": "third_party/patches/wine/0016-darwin-arm64-enable-synchronous-gui-callbacks.patch",
+      "sha256": "a408cbf7a112a9538490827f613b3cf3c6b670e1e7fd075e156c5d7aedef324f",
+      "authoringCommit": "c513608e0b1c2e8393dfdc30aa890fce8e1b40ba",
+      "purpose": "Preserve pointer-width syscall results, synchronously complete translated user callbacks, avoid an unbounded translated Explorer desktop, load winemac directly, and use the canonical high KUSER mapping so native Darwin ARM64 GUI windows can initialize and remain visible."
     }
   ],
   "researchEvidence": {
