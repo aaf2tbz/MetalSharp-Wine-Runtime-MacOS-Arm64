@@ -5,7 +5,7 @@
   "patchSha256": "36774371e862c7a44775b19d16b130c23ab0beccf223d755b0321225c7fbfd03",
   "jitPatchSha256": "797f92651c17b86cce97a5bc73dd88e0c014e4f7c8664b4ee4d4c431a8175c80",
   "i386PatchSha256": "50499a434838be5620fb86d4a6e214e6a9545eeac0dd059b1f56385a78b6cbeb",
-  "syncPatchSha256": "af45897d2ef1cad52f1e8b6df2de12ddb8f56f112376ef8171a342a40698c452",
+  "syncPatchSha256": "06be3aef4cce6e1beceb5872106cfa11b7909fa3631a6a587669c71c6d900b33",
   "license": "ISC",
   "prePatch": {
     "blink/machine.c": "73a32c95fbc191394c116bd2f41ebba464c963718b3785adaca22c5a93e8dc89",
@@ -14,7 +14,7 @@
   },
   "postPatch": {
     "blink/fusion.c": "492f2bf80ba626b63e37de749dcc679b439e44e135d01db718d84f9cb13dd7c7",
-    "blink/gem_embed.c": "317a6a41dab13639664cad6a2c46baa375a0d47fc3bde816043983b545cede3f",
+    "blink/gem_embed.c": "c03a025f9466a49c61464c7890f07c95cfa94aaf6982ce3dec3993f1acbb4f63",
     "blink/gem_embed.h": "34d97a112cebeb7225597f0a9dab8677df0a54da95a2e4b5ddafa980245f1b6b",
     "blink/instruction.c": "643b63a9af36ab8732df8643552bd8b2ccf7c8e692ca58c6a4a209348e60e380",
     "blink/machine.c": "2a0d31e98d7991d4e51844c26d07ff01619a6167c34ae84bda765916ca250a7a",
@@ -33,7 +33,7 @@
     "pathBound": "exactly one decoded instruction per GEM path",
     "branchFusion": "disabled for GEM embedding so compare/test and conditional branch remain separate checked transactions",
     "crossPage": "one-instruction GEM paths may span two 4 KiB pages; invalidating either page also resets hooks beginning on its predecessor",
-    "shadowPages": "bounded 64-page FIFO; native one-instruction JIT paths call Blink C handlers so fetched, stack-adjacent, read, and written pages are reconciled against canonical memory before commit",
+    "shadowPages": "bounded 64-page FIFO; long-mode paths reconcile cached pages per instruction, while legacy-32 paths reconcile at explicit GEM transaction boundaries",
     "serializing": "admitted serializing instructions use the same bounded GEM path; denied syscall, interrupt, and privileged handlers are rejected before execution",
     "productionFallback": "none; interpreter mode is an explicit test oracle only"
   },

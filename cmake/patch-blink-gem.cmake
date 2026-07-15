@@ -6,7 +6,7 @@ set(p1 "${MSWR_SOURCE_DIR}/third_party/patches/blink/0001-gem-real-interpreter-e
 set(p2 "${MSWR_SOURCE_DIR}/third_party/patches/blink/0002-gem-bounded-jit-embedding.patch")
 set(p3 "${MSWR_SOURCE_DIR}/third_party/patches/blink/0003-gem-i386-legacy-mode.patch")
 set(p4 "${MSWR_SOURCE_DIR}/third_party/patches/blink/0004-gem-batched-shadow-sync.patch")
-foreach(pair IN ITEMS "${p1};36774371e862c7a44775b19d16b130c23ab0beccf223d755b0321225c7fbfd03" "${p2};797f92651c17b86cce97a5bc73dd88e0c014e4f7c8664b4ee4d4c431a8175c80" "${p3};50499a434838be5620fb86d4a6e214e6a9545eeac0dd059b1f56385a78b6cbeb" "${p4};af45897d2ef1cad52f1e8b6df2de12ddb8f56f112376ef8171a342a40698c452")
+foreach(pair IN ITEMS "${p1};36774371e862c7a44775b19d16b130c23ab0beccf223d755b0321225c7fbfd03" "${p2};797f92651c17b86cce97a5bc73dd88e0c014e4f7c8664b4ee4d4c431a8175c80" "${p3};50499a434838be5620fb86d4a6e214e6a9545eeac0dd059b1f56385a78b6cbeb" "${p4};06be3aef4cce6e1beceb5872106cfa11b7909fa3631a6a587669c71c6d900b33")
  list(GET pair 0 p)
  list(GET pair 1 expected)
  file(SHA256 "${p}" actual)
