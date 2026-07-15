@@ -59,3 +59,16 @@ It binds FS-based TEB and x87 state, rejects addresses outside `[0, 2^32)`, and 
 reviewed long-mode page-table system underneath the adapter because Blink's virtual-memory helper
 requires that system mode. The thread-confined machine itself executes with
 `XED_MACHINE_MODE_LEGACY_32`; all mappings remain disposable GEM transaction snapshots.
+
+`0005-gem-rosetta-i386-conformance.patch` (SHA-256
+`6c704396c72f739b5e5bd1cf22dc0f85ddb3cb69160fbcc965fcb44cba0c708a`)
+captures semantics established by differential execution against Rosetta 2. It corrects auxiliary
+carry for INC and NEG, computes CMPXCHG flags from destination minus accumulator for every operand
+width and memory path, corrects nonzero LZCNT results, and implements the SSE4.1 PMINSD opcode in
+Blink's existing static instruction runtime. PMINSD is core interpreter support, not a dynamically
+loaded compatibility shim; its legacy MMX encoding remains an invalid-opcode fault.
+
+`0006-gem-rosetta-sse41-minmax.patch` (SHA-256
+`7aca01d50c670da77df8c8366806b2de7d42c3a21ba47532c1e21b00d00aa9be`)
+completes the SSE4.1 packed integer min/max family exposed by the expanded Rosetta corpus:
+PMINSB, PMINSD, PMINUW, PMINUD, PMAXSB, PMAXSD, PMAXUW, and PMAXUD.

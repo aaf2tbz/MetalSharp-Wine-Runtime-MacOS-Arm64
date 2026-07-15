@@ -316,6 +316,8 @@ def main():
     parser.add_argument("--jit-patch", type=Path, required=True)
     parser.add_argument("--i386-patch", type=Path, required=True)
     parser.add_argument("--sync-patch", type=Path, required=True)
+    parser.add_argument("--rosetta-patch", type=Path, required=True)
+    parser.add_argument("--rosetta-sse41-patch", type=Path, required=True)
     parser.add_argument("--provenance", type=Path, required=True)
     args = parser.parse_args()
 
@@ -326,6 +328,14 @@ def main():
     need(digest(args.jit_patch) == provenance["jitPatchSha256"], "JIT patch hash")
     need(digest(args.i386_patch) == provenance["i386PatchSha256"], "i386 patch hash")
     need(digest(args.sync_patch) == provenance["syncPatchSha256"], "sync patch hash")
+    need(
+        digest(args.rosetta_patch) == provenance["rosettaPatchSha256"],
+        "Rosetta conformance patch hash",
+    )
+    need(
+        digest(args.rosetta_sse41_patch) == provenance["rosettaSse41PatchSha256"],
+        "Rosetta SSE4.1 patch hash",
+    )
     for relative, expected_hash in provenance["postPatch"].items():
         need(digest(args.source / relative) == expected_hash, f"hash {relative}")
 
