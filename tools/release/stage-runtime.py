@@ -182,6 +182,24 @@ export XLOCALEDIR="$root/share/X11/locale"
 export XERRORDB="$root/share/X11/XErrorDB"
 cd "$root"
 
+# Publication archives intentionally omit extended attributes. Restore the
+# branded Finder/Dock icon directly on the native loader after extraction,
+# before Cocoa registers the process with the Dock.
+runtime_icon="$root/share/metalsharp/MetalSharpRuntime.icns"
+if [ -f "$runtime_icon" ] && \
+   ! /usr/bin/xattr -p com.apple.ResourceFork "$root/bin/.wine-real" >/dev/null 2>&1; then
+    /usr/bin/osascript -l JavaScript - "$root/bin/.wine-real" "$runtime_icon" \
+        >/dev/null 2>&1 <<'METALSHARP_ICON' || true
+ObjC.import('AppKit')
+function run(argv) {
+    const target = $(argv[0])
+    const icon = $.NSImage.alloc.initWithContentsOfFile($(argv[1]))
+    if (!icon) throw new Error('could not load MetalSharp runtime icon')
+    return Boolean($.NSWorkspace.sharedWorkspace.setIconForFileOptions(icon, target, 0))
+}
+METALSHARP_ICON
+fi
+
 prefix_ready()
 {
     prefix=${WINEPREFIX:-"$HOME/.wine"}

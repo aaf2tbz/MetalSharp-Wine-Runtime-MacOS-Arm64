@@ -114,6 +114,13 @@ is not a release input.
      their restored continuations;
    - uses a server-owned desktop without translated Explorer, loads
      `winemac.drv` directly, and reads KUSER from its canonical high mapping.
+17. `0017-darwin-arm64-canonicalize-wow64-gui-pointers.patch`
+   - canonicalizes 32-bit guest pointers embedded in WoW64 GUI, macdrv,
+     printing, and code-page parameter blocks on Darwin ARM64;
+   - initializes GDI stock objects safely for early dependency calls and
+     guards callbacks until the 32-bit callback table is published;
+   - preserves atom-valued properties and converts structured window-message
+     pointers so 32-bit applications can create sustained interactive windows.
 
 ## Current evidence and limitation
 

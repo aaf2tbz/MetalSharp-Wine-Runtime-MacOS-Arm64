@@ -57,6 +57,7 @@ void gem_i386_runtime_destroy(struct gem_i386_runtime *runtime) {
 
 enum gem_stop_reason gem_i386_runtime_run(struct gem_i386_runtime *runtime,
                                           struct gem_i386_context *context, uint64_t budget) {
+    const uint64_t transaction_slice = 4096U;
     enum gem_stop_reason reason = GEM_STOP_BUDGET_EXPIRED;
     uint64_t retired = 0U;
     if (runtime == NULL)
@@ -74,43 +75,55 @@ enum gem_stop_reason gem_i386_runtime_run(struct gem_i386_runtime *runtime,
     }
     runtime->running = true;
     while (retired < budget) {
-        struct gem_i386_context output;
-        uint32_t one = 0U;
-        uint32_t boundary;
-        if (context->eip == runtime->config.host_return_sentinel) {
-            reason = GEM_STOP_HOST_RETURN;
-            break;
-        }
-        if (atomic_exchange_explicit(&runtime->async_stop_requested, false, memory_order_acq_rel)) {
-            reason = GEM_STOP_ASYNC_REQUEST;
-            break;
-        }
-        boundary = boundary_status(runtime, context->eip);
-        if (boundary != 0U) {
-            runtime->last_stop.engine_status = boundary;
-            reason = GEM_STOP_SYSCALL;
-            break;
-        }
+        uint64_t slice_retired = 0U;
+        uint64_t slice_budget = budget - retired;
+        if (slice_budget > transaction_slice)
+            slice_budget = transaction_slice;
         runtime->transaction = gem_memory_transaction_begin(runtime->memory);
         if (runtime->transaction == NULL) {
             reason = GEM_STOP_INVARIANT_VIOLATION;
             break;
         }
-        reason = gem_i386_blink_step(runtime, context, &output, &one);
+        gem_i386_blink_sync(runtime);
+        reason = GEM_STOP_NONE;
+        while (slice_retired < slice_budget) {
+            struct gem_i386_context output;
+            uint32_t one = 0U;
+            uint32_t boundary;
+            if (context->eip == runtime->config.host_return_sentinel) {
+                reason = GEM_STOP_HOST_RETURN;
+                break;
+            }
+            if (atomic_exchange_explicit(&runtime->async_stop_requested, false,
+                                         memory_order_acq_rel)) {
+                reason = GEM_STOP_ASYNC_REQUEST;
+                break;
+            }
+            boundary = boundary_status(runtime, context->eip);
+            if (boundary != 0U) {
+                runtime->last_stop.engine_status = boundary;
+                reason = GEM_STOP_SYSCALL;
+                break;
+            }
+            reason = gem_i386_blink_step(runtime, context, &output, &one);
+            if (reason != GEM_STOP_NONE)
+                break;
+            if (one != 1U || !gem_i386_context_is_valid(&output)) {
+                reason = GEM_STOP_INVARIANT_VIOLATION;
+                break;
+            }
+            *context = output;
+            ++retired;
+            ++slice_retired;
+            if (context->eip == runtime->config.host_return_sentinel) {
+                reason = GEM_STOP_HOST_RETURN;
+                break;
+            }
+        }
         gem_memory_transaction_end(runtime->transaction);
         runtime->transaction = NULL;
         if (reason != GEM_STOP_NONE)
             break;
-        if (one != 1U || !gem_i386_context_is_valid(&output)) {
-            reason = GEM_STOP_INVARIANT_VIOLATION;
-            break;
-        }
-        *context = output;
-        ++retired;
-        if (context->eip == runtime->config.host_return_sentinel) {
-            reason = GEM_STOP_HOST_RETURN;
-            break;
-        }
     }
     runtime->running = false;
     if (reason == GEM_STOP_NONE)

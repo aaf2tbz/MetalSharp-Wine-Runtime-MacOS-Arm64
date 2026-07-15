@@ -20,6 +20,7 @@ struct gem_i386_runtime {
 
 bool gem_i386_blink_create(struct gem_i386_runtime *runtime);
 void gem_i386_blink_destroy(struct gem_i386_runtime *runtime);
+void gem_i386_blink_sync(struct gem_i386_runtime *runtime);
 enum gem_stop_reason gem_i386_blink_step(struct gem_i386_runtime *runtime,
                                          const struct gem_i386_context *in,
                                          struct gem_i386_context *out, uint32_t *retired);

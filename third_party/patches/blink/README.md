@@ -47,7 +47,7 @@ CMake resolves `$MAKE` by searching for `gmake` and then `make`, performs those 
 verified FetchContent tree, and links the actual full static interpreter archive. `HAVE_JIT` is absent; JIT code is not referenced by the accepting target.
 The embedding API consists only of `blink_gem_machine_create`, `blink_gem_machine_destroy`,
 `blink_gem_machine_step`, `blink_gem_embedding_version`, the diagnostic trace queries
-`blink_gem_machine_trace_reset`, `blink_gem_machine_trace_info`, `blink_gem_machine_trace_read`,
+`blink_gem_machine_sync`, `blink_gem_machine_trace_reset`, `blink_gem_machine_trace_info`, `blink_gem_machine_trace_read`,
 `blink_gem_handler_name`, and the diagnostic decode-attempt queries
 `blink_gem_machine_decode_attempt_info` and `blink_gem_decode_attempt_name`. See
 `docs/architecture/adr/0008-blink-embedding.provenance.json` and `LICENSES/Blink-ISC.txt`.

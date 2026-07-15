@@ -160,6 +160,7 @@ if(MSWR_ENABLE_X64_ENGINE OR MSWR_ENABLE_I386_ENGINE)
         --patch "${CMAKE_CURRENT_SOURCE_DIR}/third_party/patches/blink/0001-gem-real-interpreter-embedding.patch"
         --jit-patch "${CMAKE_CURRENT_SOURCE_DIR}/third_party/patches/blink/0002-gem-bounded-jit-embedding.patch"
         --i386-patch "${CMAKE_CURRENT_SOURCE_DIR}/third_party/patches/blink/0003-gem-i386-legacy-mode.patch"
+        --sync-patch "${CMAKE_CURRENT_SOURCE_DIR}/third_party/patches/blink/0004-gem-batched-shadow-sync.patch"
         --provenance "${CMAKE_CURRENT_SOURCE_DIR}/docs/architecture/adr/0008-blink-embedding.provenance.json"
         RESULT_VARIABLE blink_audit_result)
     if(NOT blink_audit_result EQUAL 0)
@@ -225,6 +226,9 @@ if(MSWR_BUILD_WINE_BRIDGE)
     if(APPLE)
         target_link_options(metalsharp_gem_wine PRIVATE
             "LINKER:-exported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/cmake/metalsharp-gem-wine.exports")
+        install(FILES assets/macos/MetalSharpRuntime.icns
+            DESTINATION share/metalsharp
+            COMPONENT metalsharp-gem-wine)
     endif()
     mswr_enable_warnings(metalsharp_gem_wine)
     install(TARGETS metalsharp_gem_wine

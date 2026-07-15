@@ -120,6 +120,10 @@ void gem_i386_blink_destroy(struct gem_i386_runtime *runtime) {
     runtime->backend = NULL;
 }
 
+void gem_i386_blink_sync(struct gem_i386_runtime *runtime) {
+    blink_gem_machine_sync(runtime->backend);
+}
+
 enum gem_stop_reason gem_i386_blink_step(struct gem_i386_runtime *runtime,
                                          const struct gem_i386_context *in,
                                          struct gem_i386_context *out, uint32_t *retired) {

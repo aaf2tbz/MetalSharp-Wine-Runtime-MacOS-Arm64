@@ -315,6 +315,7 @@ def main():
     parser.add_argument("--patch", type=Path, required=True)
     parser.add_argument("--jit-patch", type=Path, required=True)
     parser.add_argument("--i386-patch", type=Path, required=True)
+    parser.add_argument("--sync-patch", type=Path, required=True)
     parser.add_argument("--provenance", type=Path, required=True)
     args = parser.parse_args()
 
@@ -324,6 +325,7 @@ def main():
     need(digest(args.patch) == provenance["patchSha256"], "patch hash")
     need(digest(args.jit_patch) == provenance["jitPatchSha256"], "JIT patch hash")
     need(digest(args.i386_patch) == provenance["i386PatchSha256"], "i386 patch hash")
+    need(digest(args.sync_patch) == provenance["syncPatchSha256"], "sync patch hash")
     for relative, expected_hash in provenance["postPatch"].items():
         need(digest(args.source / relative) == expected_hash, f"hash {relative}")
 
@@ -368,6 +370,7 @@ def main():
         "guest_address(g, in->rip)",
         "m->fs.base = s->fs_base",
         "memcpy(m->fpu.st, s->x87",
+        "blink_gem_machine_sync(",
     ):
         need(required in embedding, f"missing bounded JIT embedding invariant {required}")
     need("m->gemembed || opclass == kOpBranching" in machine, "JIT path is not one instruction")
