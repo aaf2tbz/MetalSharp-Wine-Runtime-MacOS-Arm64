@@ -1,4 +1,13 @@
 
+SharpWine
+Copyright 2026 Avery Felts
+
+Original SharpWine source code is licensed under the Apache License 2.0
+below unless a file or directory states otherwise. Wine-derived patches and
+runtime components remain under their respective upstream licenses. Bundled
+release artifacts include the applicable third-party license texts and SBOM;
+this license does not replace or modify those terms.
+
                                  Apache License
                            Version 2.0, January 2004
                         http://www.apache.org/licenses/

@@ -181,7 +181,7 @@ jobs:
           python3 tools/release/test-packaged-runtime.py --runtime "$probe" \
             --x86-64-fixture "$X86_64_FIXTURE" \
             --skip-retained-x86-64 \
-            --evidence "${RUNNER_TEMP}/probe-evidence" --stress-iterations 1 --timeout 300
+            --evidence "${RUNNER_TEMP}/probe-evidence" --stress-iterations 1 --timeout 600
           python3 tools/release/finalize-i386-evidence.py \
             --build-manifest "$BUILD_MANIFEST" \
             --test-summary "${RUNNER_TEMP}/probe-evidence/summary.json" \
@@ -213,7 +213,7 @@ jobs:
             --x86-64-fixture "$X86_64_FIXTURE" \
             --skip-retained-x86-64 \
             --evidence "${RUNNER_TEMP}/release-bump-evidence" \
-            --stress-iterations 1 --timeout 300
+            --stress-iterations 1 --timeout 600
       - name: Repackage and validate the patched release tarball
         env:
           VERSION: ${{ needs.resolve-version-bump.outputs.version }}

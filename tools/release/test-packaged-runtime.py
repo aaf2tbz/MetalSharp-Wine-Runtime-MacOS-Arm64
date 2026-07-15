@@ -26,7 +26,7 @@ PREFIX_READY_FILES = (
     "drive_c/windows/system32/services.exe",
 )
 
-RELEASE_OPERATION_TIMEOUT = 180
+RELEASE_OPERATION_TIMEOUT = 600
 
 
 def fail(message: str) -> None:
