@@ -87,3 +87,10 @@ never escape the embedding ABI. Stack reads and writes now preserve their
 precise access type and failing cross-page address. Guest writes to executable
 shadow pages also invalidate that page and its possible cross-page predecessor
 before the next JIT execution.
+
+`0011-gem-preserve-shadow-snapshot-fault.patch` (SHA-256
+`c3ccbbee11adb765bb80d54560e1e3240668136f0a6f03c8c06fcd961d8a05b0`)
+preserves the exact memory error when a legacy i386 shadow snapshot fails.
+This prevents a freed external Wine mapping from reaching either execution
+engine and keeps the fault address, access class, and memory status available
+to the compatibility boundary.

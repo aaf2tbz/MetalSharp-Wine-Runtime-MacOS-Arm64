@@ -360,6 +360,7 @@ def main():
     parser.add_argument("--phase2-patch", type=Path, required=True)
     parser.add_argument("--phase3-patch", type=Path, required=True)
     parser.add_argument("--phase4-patch", type=Path, required=True)
+    parser.add_argument("--phase6-patch", type=Path, required=True)
     parser.add_argument("--capability-manifest", type=Path, required=True)
     parser.add_argument("--phase3-corpus", type=Path, required=True)
     parser.add_argument("--provenance", type=Path, required=True)
@@ -384,6 +385,7 @@ def main():
     need(digest(args.phase2_patch) == provenance["phase2PatchSha256"], "phase 2 patch hash")
     need(digest(args.phase3_patch) == provenance["phase3PatchSha256"], "phase 3 patch hash")
     need(digest(args.phase4_patch) == provenance["phase4PatchSha256"], "phase 4 patch hash")
+    need(digest(args.phase6_patch) == provenance["phase6PatchSha256"], "phase 6 patch hash")
     for relative, expected_hash in provenance["postPatch"].items():
         need(digest(args.source / relative) == expected_hash, f"hash {relative}")
 

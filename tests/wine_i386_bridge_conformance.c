@@ -10,6 +10,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(__APPLE__)
+#include <sys/mman.h>
+#endif
 #include <unistd.h>
 
 #define IMAGE_BASE UINT32_C(0x00400000)
@@ -242,6 +245,38 @@ int main(void) {
         assert(result.stop.fault_address == UINT32_C(0x00500000));
         assert(result.stop.memory_error == GEM_MEMORY_NOT_RESERVED);
     }
+
+#if defined(__APPLE__)
+    {
+        const uint32_t stale_code = UINT32_C(0x00600000);
+        uint8_t *host = mmap(NULL, host_page, PROT_READ | PROT_WRITE,
+                             MAP_PRIVATE | MAP_ANON, -1, 0);
+        assert(host != MAP_FAILED);
+        host[0] = 0x90U;
+        assert(gem_wine_process_reserve(process, stale_code, GEM_WINE_GUEST_PAGE_SIZE) ==
+               GEM_WINE_OK);
+        assert(gem_wine_process_commit_i386_host(process, stale_code, host,
+                                                 GEM_WINE_GUEST_PAGE_SIZE,
+                                                 GEM_WINE_PAGE_EXECUTE_READWRITE) == GEM_WINE_OK);
+        assert(munmap(host, host_page) == 0);
+        input.eip = stale_code;
+        input.stop_reason = GEM_STOP_NONE;
+        boundary_state.calls = 0U;
+        boundary_state.expected_event = GEM_WINE_EVENT_MEMORY_FAULT;
+        boundary_state.expected_engine_status = 0U;
+        boundary_state.expected_access = GEM_I386_ACCESS_FETCH;
+        boundary_state.resume_bytes = 0U;
+        assert(gem_wine_i386_thread_run(thread, &input, &output, &result) ==
+               GEM_WINE_TERMINATED);
+        assert(boundary_state.calls == 1U);
+        assert(result.stop.fault_address == stale_code);
+        if (result.stop.memory_error != GEM_MEMORY_NOT_COMMITTED)
+            fprintf(stderr, "stale external page memory error: %u\n", result.stop.memory_error);
+        assert(result.stop.memory_error == GEM_MEMORY_NOT_COMMITTED);
+        assert(gem_wine_process_release(process, stale_code, GEM_WINE_GUEST_PAGE_SIZE) ==
+               GEM_WINE_OK);
+    }
+#endif
 
     assert(gem_wine_thread_destroy(thread) == GEM_WINE_OK);
     assert(gem_wine_process_release(process, IMAGE_BASE, IMAGE_SIZE) == GEM_WINE_OK);

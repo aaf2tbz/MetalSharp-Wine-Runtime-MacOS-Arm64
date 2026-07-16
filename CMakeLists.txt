@@ -167,6 +167,7 @@ if(MSWR_ENABLE_X64_ENGINE OR MSWR_ENABLE_I386_ENGINE)
         --phase2-patch "${CMAKE_CURRENT_SOURCE_DIR}/third_party/patches/blink/0008-gem-i386-normalized-exceptions.patch"
         --phase3-patch "${CMAKE_CURRENT_SOURCE_DIR}/third_party/patches/blink/0009-gem-i386-legacy-state.patch"
         --phase4-patch "${CMAKE_CURRENT_SOURCE_DIR}/third_party/patches/blink/0010-gem-i386-phase4-corrections.patch"
+        --phase6-patch "${CMAKE_CURRENT_SOURCE_DIR}/third_party/patches/blink/0011-gem-preserve-shadow-snapshot-fault.patch"
         --capability-manifest "${CMAKE_CURRENT_SOURCE_DIR}/docs/architecture/adr/i386-phase3-capabilities.json"
         --phase3-corpus "${CMAKE_CURRENT_SOURCE_DIR}/tests/i386_phase3_conformance.c"
         --provenance "${CMAKE_CURRENT_SOURCE_DIR}/docs/architecture/adr/0008-blink-embedding.provenance.json"

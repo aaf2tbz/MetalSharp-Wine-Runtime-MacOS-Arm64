@@ -3,6 +3,10 @@
 #include "memory_internal.h"
 #include <stdlib.h>
 #include <string.h>
+#if defined(__APPLE__)
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
+#endif
 #if defined(_WIN32)
 #include <windows.h>
 #else
@@ -23,6 +27,26 @@ struct page {
     struct page *next;
     struct page *hash_next;
 };
+
+#if defined(__APPLE__)
+static bool external_range_accessible(const struct backing *backing, size_t offset, size_t size,
+                                      bool write) {
+    mach_vm_address_t address = (mach_vm_address_t)(uintptr_t)(backing->data + offset);
+    mach_vm_address_t region = address;
+    mach_vm_size_t region_size = 0;
+    vm_region_basic_info_data_64_t info;
+    mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
+    mach_port_t object = MACH_PORT_NULL;
+    kern_return_t result =
+        mach_vm_region(mach_task_self(), &region, &region_size, VM_REGION_BASIC_INFO_64,
+                       (vm_region_info_t)&info, &count, &object);
+    if (object != MACH_PORT_NULL)
+        mach_port_deallocate(mach_task_self(), object);
+    return result == KERN_SUCCESS && region <= address && address - region <= region_size &&
+           size <= region_size - (address - region) && (info.protection & VM_PROT_READ) != 0 &&
+           (!write || (info.protection & VM_PROT_WRITE) != 0);
+}
+#endif
 
 /*
  * Per-`gem_memory` exclusive lock.  Every public operation that observes or
@@ -576,6 +600,12 @@ static enum gem_memory_error peek_locked(struct gem_memory *m, uint64_t a, void 
             return GEM_MEMORY_NOT_RESERVED;
         if (!p->backing)
             return GEM_MEMORY_NOT_COMMITTED;
+#if defined(__APPLE__)
+        if (p->backing->external &&
+            !external_range_accessible(p->backing, (size_t)((a + done) & UINT64_C(4095)), z,
+                                       false))
+            return GEM_MEMORY_NOT_COMMITTED;
+#endif
         done += z;
     }
     done = 0;
@@ -628,18 +658,14 @@ enum gem_memory_error gem_memory_transaction_validate(struct gem_memory_transact
                                                       uint64_t address, size_t size, bool write,
                                                       bool execute) {
     enum gem_memory_error error;
-    uint8_t *temporary;
+    uint8_t unused;
     if (transaction == NULL || (write && execute))
         return GEM_MEMORY_INVALID_ARGUMENT;
     if (size == 0U)
         return GEM_MEMORY_OK;
-    temporary = malloc(size);
-    if (temporary == NULL)
-        return GEM_MEMORY_NO_MEMORY;
-    error = access_memory_locked(transaction->memory, address, temporary, size, write, execute,
-                                 write, true);
-    free(temporary);
-    if (error == GEM_MEMORY_OK && write) {
+    error = access_memory_locked(transaction->memory, address, &unused, size, write, execute, true,
+                                 false);
+    if (error == GEM_MEMORY_OK) {
         size_t done = 0U;
         while (done < size) {
             const uint64_t page_address = (address + done) & ~UINT64_C(4095);

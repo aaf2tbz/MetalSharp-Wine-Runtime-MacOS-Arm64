@@ -880,7 +880,10 @@ enum gem_wine_status gem_wine_i386_thread_create(struct gem_wine_process *proces
     runtime_config.windows_syscall_boundary = process->i386_config.windows_syscall_boundary;
     runtime_config.unix_call_boundary = process->i386_config.unix_call_boundary;
     runtime_config.max_budget = process->config.segment_instruction_budget;
-    runtime_config.engine_mode = GEM_I386_ENGINE_INTERPRETER;
+    runtime_config.engine_mode =
+        (process->i386_config.flags & GEM_WINE_I386_FLAG_INTERPRETER_ORACLE) != 0U
+            ? GEM_I386_ENGINE_INTERPRETER
+            : GEM_I386_ENGINE_JIT;
     thread->i386_runtime = gem_i386_runtime_create(process->memory, &runtime_config);
     if (thread->i386_runtime == NULL) {
         (void)pthread_mutex_destroy(&thread->runtime_lock);

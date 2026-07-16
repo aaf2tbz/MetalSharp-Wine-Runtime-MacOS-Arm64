@@ -212,6 +212,26 @@ prefix_ready()
     done
 }
 
+wow64_ready()
+{
+    prefix=${WINEPREFIX:-"$HOME/.wine"}
+    for name in notepad.exe ntdll.dll kernel32.dll user32.dll win32u.dll
+    do
+        test -s "$prefix/drive_c/windows/syswow64/$name" || return 1
+    done
+}
+
+ensure_wow64_payload()
+{
+    wow64_ready && return 0
+    source="$root/lib/wine/i386-windows"
+    target="${WINEPREFIX:-"$HOME/.wine"}/drive_c/windows/syswow64"
+    test -d "$source" || return 1
+    mkdir -p "$target"
+    /usr/bin/ditto "$source" "$target"
+    wow64_ready
+}
+
 recover_wineboot()
 {
     prefix=${WINEPREFIX:-"$HOME/.wine"}
@@ -267,7 +287,7 @@ recover_wineboot()
     wait "$installer" 2>/dev/null || true
     "$root/bin/.wineserver-real" -k >/dev/null 2>&1 || true
     "$root/bin/.wineserver-real" -w >/dev/null 2>&1 || true
-    prefix_ready
+    prefix_ready && ensure_wow64_payload
 }
 
 if test "$(basename "$0")" = wineboot; then
@@ -283,12 +303,16 @@ if test "$(basename "$0")" = wineboot; then
     initial=0
     (exec -a "$0" "$root/bin/.wine-real" "$@") || initial=$?
     if prefix_ready; then
+        ensure_wow64_payload
         exit "$initial"
     fi
     recover_wineboot
     exit 0
 fi
 
+if prefix_ready; then
+    ensure_wow64_payload
+fi
 exec -a "$0" "$root/bin/.wine-real" "$@"
 """, encoding="utf-8")
     os.chmod(launcher, 0o755)
