@@ -262,53 +262,89 @@ def audit_decode_attempt(provenance, machine_text, embedding_text, embedding_hea
         "g->last_decode.valid = 1u;" in embedding_text,
         "decode attempt valid flag not set on successful LoadInstruction",
     )
-    # Identity must be sourced from Blink's own already-decoded mopcode; no
-    # second decoder, byte scanner, or external lookup may be introduced.
-    need(
-        "Mopcode(m->xedd->op.rde)" in embedding_text,
-        "decode attempt identity not sourced from Blink mopcode",
-    )
-    need(
-        "DescribeMopcode((int)g->last_decode.mopcode)" in embedding_text,
-        "decode attempt name not sourced from Blink DescribeMopcode",
-    )
-    need(
-        '#include "blink/debug.h"' in embedding_text,
-        "decode attempt name source header missing",
-    )
+    need("Mopcode(m->xedd->op.rde)" in embedding_text,
+         "decode attempt identity not sourced from Blink mopcode")
+    need("DescribeMopcode((int)g->last_decode.mopcode)" in embedding_text,
+         "decode attempt name not sourced from Blink DescribeMopcode")
+    need('#include "blink/debug.h"' in embedding_text,
+         "decode attempt name source header missing")
     need(
         re.search(
             r"GemHandlerId\(GetOp\(Mopcode\(m->xedd->op.rde\)\),\s*"
             r"m->xedd->op.rde,\s*"
-            r"g->guest_mode == BLINK_GEM_GUEST_LEGACY_32\)",
-            embedding_text,
-        )
-        and "g->last_decode.handler_id" in embedding_text,
+            r"g->guest_mode == BLINK_GEM_GUEST_LEGACY_32\)", embedding_text,
+        ) and "g->last_decode.handler_id" in embedding_text,
         "decode attempt handler_id not sourced from GemHandlerId",
     )
-    # The struct must carry an explicit Blink-provided name (length bounded)
-    # and a valid flag; the machine-owned struct is the single authority.
     need(
         "name[BLINK_GEM_DECODE_ATTEMPT_NAME_BYTES]" in embedding_header
         and "uint8_t  valid;" in embedding_header,
         "decode attempt record fields missing",
     )
     decode_attempt = provenance["decodeAttempt"]
-    need(
-        decode_attempt["abiVersion"] == 1
-        and decode_attempt["nameBytes"] == 32
-        and decode_attempt["resetPerStep"],
-        "decode attempt provenance drift",
-    )
+    need(decode_attempt["abiVersion"] == 1 and decode_attempt["nameBytes"] == 32
+         and decode_attempt["resetPerStep"], "decode attempt provenance drift")
     need(
         decode_attempt["identitySource"]
         == "Mopcode(m->xedd->op.rde) + DescribeMopcode() in blink/gem_embed.c",
         "decode attempt identity source drift",
     )
+    need(decode_attempt["nameSource"] == "blink/name.c DescribeMopcode()",
+         "decode attempt name source drift")
+
+
+def audit_phase3_capabilities(source_root, manifest_path, corpus_path):
+    manifest = json.loads(manifest_path.read_text())
+    need(manifest["schemaVersion"] == 1, "Phase 3 capability schema")
+    need(manifest["hostIndependent"], "Phase 3 CPUID profile must be host independent")
+    need(manifest["corpus"]["cases"] == 1024, "Phase 3 case total")
+    need(manifest["corpus"]["comparisons"] == 2048, "Phase 3 comparison total")
+    reference = manifest_path.parents[3] / manifest["corpus"]["reference"]
+    need(reference.is_file(), "Phase 3 versioned reference corpus missing")
+    need(digest(reference) == manifest["corpus"]["referenceSha256"],
+         "Phase 3 reference corpus hash")
     need(
-        decode_attempt["nameSource"] == "blink/name.c DescribeMopcode()",
-        "decode attempt name source drift",
+        manifest["corpus"]["categories"]
+        == {"x87": 256, "mmx": 128, "simd": 384,
+            "repAndSegmentation": 160, "cpuidAndContext": 96},
+        "Phase 3 category totals",
     )
+    expected = {
+        ("FPU", "0x00000001", "edx", 0), ("CX8", "0x00000001", "edx", 8),
+        ("CMOV", "0x00000001", "edx", 15), ("MMX", "0x00000001", "edx", 23),
+        ("FXSR", "0x00000001", "edx", 24), ("SSE", "0x00000001", "edx", 25),
+        ("SSE2", "0x00000001", "edx", 26), ("SSE3", "0x00000001", "ecx", 0),
+        ("PCLMUL", "0x00000001", "ecx", 1), ("SSSE3", "0x00000001", "ecx", 9),
+        ("SSE4.1", "0x00000001", "ecx", 19), ("SSE4.2", "0x00000001", "ecx", 20),
+        ("POPCNT", "0x00000001", "ecx", 23), ("AES", "0x00000001", "ecx", 25),
+        ("ERMS", "0x00000007", "ebx", 9),
+    }
+    actual = {(item["name"], item["leaf"], item["register"], item["bit"])
+              for item in manifest["advertised"]}
+    need(actual == expected, "advertised CPUID capability drift")
+    need(
+        set(manifest["masked"])
+        == {"AVX", "AVX2", "FMA", "OSXSAVE", "BMI1", "BMI2", "ADX",
+            "FSGSBASE", "RDRAND", "RDSEED", "RDPID", "CX16", "LONG_MODE",
+            "SYSCALL", "RDTSCP"},
+        "masked CPUID capability drift",
+    )
+    sources = "\n".join(path.read_text() for path in (source_root / "blink").glob("*.c"))
+    corpus = corpus_path.read_text()
+    for item in manifest["advertised"]:
+        need(item["handlers"], f"missing handlers for {item['name']}")
+        for handler in item["handlers"]:
+            need(f"{handler}(" in sources, f"missing advertised handler {handler}")
+        need(item["witness"] in corpus, f"missing corpus witness for {item['name']}")
+        for witness in item.get("opcodeWitnesses", ()):
+            need(witness in corpus, f"missing opcode witness {item['name']} {witness}")
+    sse41 = next(item for item in manifest["advertised"] if item["name"] == "SSE4.1")
+    sse42 = next(item for item in manifest["advertised"] if item["name"] == "SSE4.2")
+    need(len(sse41["opcodeWitnesses"]) >= 38, "incomplete SSE4.1 opcode witnesses")
+    need(len(sse42["opcodeWitnesses"]) >= 6, "incomplete SSE4.2 opcode witnesses")
+    need("void OpSse4(P)" in sources and "PackedStringCompare(A" in sources,
+         "portable SSE4 family handler missing")
+    need("Phase 3 corpus passed" in corpus, "Phase 3 corpus completion oracle missing")
 
 
 def main():
@@ -322,11 +358,14 @@ def main():
     parser.add_argument("--rosetta-sse41-patch", type=Path, required=True)
     parser.add_argument("--phase1-patch", type=Path, required=True)
     parser.add_argument("--phase2-patch", type=Path, required=True)
+    parser.add_argument("--phase3-patch", type=Path, required=True)
+    parser.add_argument("--capability-manifest", type=Path, required=True)
+    parser.add_argument("--phase3-corpus", type=Path, required=True)
     parser.add_argument("--provenance", type=Path, required=True)
     args = parser.parse_args()
 
     provenance = json.loads(args.provenance.read_text())
-    need(provenance["schemaVersion"] == 6, "provenance schema")
+    need(provenance["schemaVersion"] == 7, "provenance schema")
     need(provenance["revision"] == PINNED_REVISION, "revision")
     need(digest(args.patch) == provenance["patchSha256"], "patch hash")
     need(digest(args.jit_patch) == provenance["jitPatchSha256"], "JIT patch hash")
@@ -342,6 +381,7 @@ def main():
     )
     need(digest(args.phase1_patch) == provenance["phase1PatchSha256"], "phase 1 patch hash")
     need(digest(args.phase2_patch) == provenance["phase2PatchSha256"], "phase 2 patch hash")
+    need(digest(args.phase3_patch) == provenance["phase3PatchSha256"], "phase 3 patch hash")
     for relative, expected_hash in provenance["postPatch"].items():
         need(digest(args.source / relative) == expected_hash, f"hash {relative}")
 
@@ -354,6 +394,7 @@ def main():
     instruction = (args.source / "blink/instruction.c").read_text()
     legacy = (args.source / "blink/legacy.c").read_text()
     stack = (args.source / "blink/stack.c").read_text()
+    string = (args.source / "blink/string.c").read_text()
     throw = (args.source / "blink/throw.c").read_text()
     for symbol in (
         "NewSystem(",
@@ -386,8 +427,11 @@ def main():
         "BLINK_GEM_GUEST_LEGACY_32",
         "XED_MACHINE_MODE_LEGACY_32",
         "guest_address(g, in->rip)",
-        "m->fs.base = s->fs_base",
-        "memcpy(m->fpu.st, s->x87",
+        "m->fs.base = s->fs_base ? s->fs_base : s->segments[4].base",
+        "DeserializeLdbl(s->x87[i])",
+        "SerializeLdbl(out->x87[i], m->fpu.st[i])",
+        "m->seg[i].limit = s->segments[i].limit",
+        "m->fpu.ip = s->fip",
         "blink_gem_machine_sync(",
         "BLINK_GEM_EXCEPTION_DIVIDE",
         "BLINK_GEM_EXCEPTION_ILLEGAL_INSTRUCTION",
@@ -412,6 +456,10 @@ def main():
         "GEM precise stack access/fault tracking missing",
     )
     need(
+        string.count("m->gemembed && m->mode.omode == XED_MODE_LEGACY") == 2,
+        "legacy GEM REP byte operations can bypass restartable iteration state",
+    )
+    need(
         fusion.count("if (m->gemembed) return false;") == 2,
         "GEM branch fusion can consume more than one decoded instruction",
     )
@@ -429,6 +477,7 @@ def main():
     audit_handlers(args.source, provenance, machine)
     audit_trace(provenance, machine, embedding, embedding_header)
     audit_decode_attempt(provenance, machine, embedding, embedding_header)
+    audit_phase3_capabilities(args.source, args.capability_manifest, args.phase3_corpus)
     need(
         "if (m->gemembed)" in throw and "siglongjmp(m->onhalt, code)" in throw,
         "structured halt missing",

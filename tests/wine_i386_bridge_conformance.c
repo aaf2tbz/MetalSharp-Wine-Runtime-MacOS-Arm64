@@ -7,6 +7,7 @@
 #endif
 #include <assert.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -23,6 +24,7 @@ struct boundary_state {
     uint32_t expected_engine_status;
     uint32_t expected_access;
     uint32_t resume_bytes;
+    uint32_t mutate_v2;
 };
 
 static enum gem_wine_status boundary(void *opaque,
@@ -31,6 +33,13 @@ static enum gem_wine_status boundary(void *opaque,
     struct boundary_state *state = opaque;
     assert(request->version == GEM_WINE_BOUNDARY_ABI_VERSION);
     assert(request->struct_size == sizeof(*request));
+    if (request->event != state->expected_event)
+        fprintf(stderr,
+                "i386 boundary event mismatch: expected=%u actual=%u status=%u access=%u "
+                "eip=%08x fault=%08llx memory=%u\n",
+                state->expected_event, request->event, request->stop.engine_status,
+                request->stop.access, request->context.eip,
+                (unsigned long long)request->stop.fault_address, request->stop.memory_error);
     assert(request->event == state->expected_event);
     if (state->expected_engine_status != 0U)
         assert(request->stop.engine_status == state->expected_engine_status);
@@ -39,6 +48,33 @@ static enum gem_wine_status boundary(void *opaque,
     ++state->calls;
     response->context = request->context;
     response->context.stop_reason = GEM_STOP_NONE;
+    if (state->mutate_v2 != 0U) {
+        unsigned int i;
+        response->context.eflags ^= UINT32_C(0x400);
+        response->context.mxcsr = UINT32_C(0x3f80);
+        response->context.fcw = UINT16_C(0x027f);
+        response->context.fsw = UINT16_C(0x2800);
+        response->context.ftw = UINT16_C(0x00ff);
+        response->context.fop = UINT16_C(0x345);
+        response->context.x87_environment.fip = UINT32_C(0x11223344);
+        response->context.x87_environment.fdp = UINT32_C(0x55667788);
+        response->context.x87_environment.fcs = UINT16_C(0x23);
+        response->context.x87_environment.fds = UINT16_C(0x2b);
+        for (i = 0U; i < 6U; ++i) {
+            response->context.segment[i] = (uint16_t)(UINT16_C(0x43) + i * 8U);
+            response->context.segment_base[i] = i == GEM_I386_CS ? 0U : UINT32_C(0x10000) * i;
+            response->context.segment_limit[i] = UINT32_MAX - i;
+            response->context.segment_attributes[i] =
+                GEM_I386_SEGMENT_PRESENT | GEM_I386_SEGMENT_DEFAULT_32 |
+                (i == GEM_I386_CS ? GEM_I386_SEGMENT_EXECUTABLE : GEM_I386_SEGMENT_WRITABLE);
+        }
+        for (i = 0U; i < 8U; ++i) {
+            response->context.xmm[i].lo = UINT64_C(0x11110000) + i;
+            response->context.xmm[i].hi = UINT64_C(0x22220000) + i;
+            response->context.x87[i].lo = UINT64_C(0x8000000000000000) + i;
+            response->context.x87[i].hi = UINT64_C(0x3fff);
+        }
+    }
     if (state->resume_bytes != 0U) {
         response->context.eip += state->resume_bytes;
         response->action = GEM_WINE_BOUNDARY_RESUME;
@@ -138,6 +174,7 @@ int main(void) {
     {
         static const uint8_t breakpoint_code[] = {0xccU, 0xb8U, 0xefU, 0xbeU,
                                                   0xadU, 0xdeU, 0x90U, 0x90U};
+        enum gem_wine_status run_status;
         memcpy(image + 0x1000U, breakpoint_code, sizeof(breakpoint_code));
         assert(gem_wine_process_invalidate_code(process, CODE_ADDRESS, sizeof(breakpoint_code)) ==
                GEM_WINE_OK);
@@ -148,11 +185,30 @@ int main(void) {
         boundary_state.expected_engine_status = GEM_I386_EXCEPTION_BREAKPOINT;
         boundary_state.expected_access = 0U;
         boundary_state.resume_bytes = 1U;
-        assert(gem_wine_i386_thread_run(thread, &input, &output, &result) == GEM_WINE_OK);
+        boundary_state.mutate_v2 = 1U;
+        run_status = gem_wine_i386_thread_run(thread, &input, &output, &result);
+        if (run_status != GEM_WINE_OK)
+            fprintf(stderr, "i386 v2 resume failed: status=%u outcome=%u stop=%u callbacks=%u\n",
+                    run_status, result.outcome, result.stop_reason,
+                    (unsigned)result.boundary_callbacks);
+        assert(run_status == GEM_WINE_OK);
         assert(boundary_state.calls == 1U);
         assert(result.outcome == GEM_WINE_RUN_COMPLETE);
         assert(output.gpr[GEM_I386_EAX] == UINT32_C(0xdeadbeef));
         assert(output.eip == HOST_RETURN);
+        assert((output.eflags & UINT32_C(0x400)) != 0U);
+        assert(output.mxcsr == UINT32_C(0x3f80));
+        assert(output.fcw == UINT16_C(0x027f) && output.fsw == UINT16_C(0x2800));
+        assert(output.x87_environment.fip == UINT32_C(0x11223344) &&
+               output.x87_environment.fdp == UINT32_C(0x55667788));
+        assert(output.x87_environment.fcs == UINT16_C(0x23) &&
+               output.x87_environment.fds == UINT16_C(0x2b));
+        assert(output.xmm[7].hi == UINT64_C(0x22220007));
+        assert(output.x87[7].lo == UINT64_C(0x8000000000000007));
+        assert(output.segment[5] == UINT16_C(0x6b));
+        assert(output.segment_base[GEM_I386_CS] == 0U);
+        assert(output.segment_base[GEM_I386_FS] == UINT32_C(0x40000));
+        boundary_state.mutate_v2 = 0U;
     }
     {
         static const uint8_t divide_code[] = {0xf7U, 0xf3U};

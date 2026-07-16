@@ -106,8 +106,13 @@ enum gem_stop_reason gem_i386_runtime_run(struct gem_i386_runtime *runtime,
                 break;
             }
             reason = gem_i386_blink_step(runtime, context, &output, &one);
-            if (reason != GEM_STOP_NONE)
+            if (reason != GEM_STOP_NONE) {
+                if (reason == GEM_STOP_MEMORY_FAULT &&
+                    runtime->last_stop.engine_status == GEM_I386_ENGINE_STATUS_RESTARTABLE_REP &&
+                    gem_i386_context_is_valid(&output))
+                    *context = output;
                 break;
+            }
             if (one != 1U || !gem_i386_context_is_valid(&output)) {
                 reason = GEM_STOP_INVARIANT_VIOLATION;
                 break;
@@ -168,7 +173,7 @@ const char *gem_i386_runtime_engine_name(const struct gem_i386_runtime *runtime)
 }
 
 const char *gem_i386_runtime_engine_version(const struct gem_i386_runtime *runtime) {
-    return runtime != NULL ? "blink-f006a4fc-gem-i386-v1" : "unavailable";
+    return runtime != NULL ? "blink-f006a4fc-gem-i386-v2" : "unavailable";
 }
 
 const char *gem_i386_runtime_engine_license(const struct gem_i386_runtime *runtime) {
@@ -177,6 +182,7 @@ const char *gem_i386_runtime_engine_license(const struct gem_i386_runtime *runti
 
 const char *gem_i386_runtime_engine_provenance(const struct gem_i386_runtime *runtime) {
     return runtime != NULL ? "jart/blink@f006a4fc6f9b8de9272504fdff0dbbe5ce5dc580;legacy32;"
+                             "context-v2;cpuid-sse42-aes-pclmul;"
                              "one-instruction;interpreter-or-aarch64-jit"
                            : "unavailable";
 }

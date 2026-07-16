@@ -108,7 +108,7 @@
         },
         {
           "path": "third_party/patches/wine/0014-ntdll-add-gem-backed-i386-wow64-execution-on-arm64.patch",
-          "sha256": "989610f9fb94798c712c36625448ef61f0e41b39ff35451c9125a095c78e25b3"
+          "sha256": "799280080a819c02afa06b301df6da684e00bea6ffbc13421e0d17fe0490d949"
         },
         {
           "path": "third_party/patches/wine/0015-ntdll-accept-relocated-initial-process-images.patch",
@@ -125,6 +125,10 @@
         {
           "path": "third_party/patches/wine/0018-xtajit-map-normalized-i386-exceptions.patch",
           "sha256": "99370fcb37054c0210b8bb867c9e07b6cd857e579adfc801b063e0943f7b2b83"
+        },
+        {
+          "path": "third_party/patches/wine/0019-xtajit-preserve-i386-v2-legacy-state.patch",
+          "sha256": "f4cbd77e6f913988bf04b5ded829c5ad87b8289348d756c14f01753a6c7a4271"
         }
       ]
     },

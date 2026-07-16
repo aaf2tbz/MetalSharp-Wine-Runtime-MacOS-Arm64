@@ -7,6 +7,8 @@
 
 #include <stdatomic.h>
 
+#define GEM_I386_ENGINE_STATUS_RESTARTABLE_REP UINT32_C(0x100)
+
 struct gem_i386_runtime {
     struct gem_memory *memory;
     struct gem_i386_runtime_config config;

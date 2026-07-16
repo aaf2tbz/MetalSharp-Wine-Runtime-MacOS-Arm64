@@ -105,10 +105,31 @@ multi-register POPA load. Those exception and stack-address changes are gated
 to the legacy-32 guest mode so the established x86_64 embedding contract and
 fault metadata remain unchanged.
 
-This result does not close the remaining coverage plan. x87/MMX state,
-string/REP instructions, segmentation, and wider seeded randomized input remain
-separate follow-on corpora because they require additional normalized state or
-exception capture.
+The Phase 3 legacy-state corpus adds 1,024 deterministic PE32 cases: 256 x87,
+128 MMX, 384 SIMD, 160 REP/segmentation, and 96 CPUID/context-transition cases.
+All records replay in both native ARM64 execution modes for 2,048/2,048 Phase 3
+comparisons. Together with the retained 2,916 Phase 1 and 220 Phase 2
+comparisons, the native deterministic total is 5,184/5,184.
+
+The fixed legacy CPU profile now reports FPU, CX8, CMOV, MMX, FXSR, SSE through
+SSE4.2, POPCNT, PCLMUL, AES, and ERMS independently of host CPU features. Its
+capability manifest binds those bits to reviewed handlers and corpus witnesses,
+including the complete SSE4.1/SSE4.2 and AES opcode groups used by the profile.
+AVX, AVX2, FMA, OSXSAVE, BMI/ADX, FSGSBASE, hardware-random, CX16, long mode,
+and legacy-inapplicable syscall features remain masked until a future context
+ABI can preserve their architectural state.
+
+Raw 80-bit x87 values and the x87 environment round-trip exactly. Common x87
+arithmetic deliberately uses host-double compatibility precision; full software
+extended-precision arithmetic is outside this phase. MMX retains physical x87
+aliasing without destroying the independent XMM register file, REP faults
+preserve completed iterations and restart at the string instruction, and all
+six segment descriptors enforce complete access widths and permissions. A
+packaged PE32 context/exception fixture also completed with its exact success
+marker and no residual Wine processes.
+
+This result does not close the remaining coverage plan. Wider seeded randomized
+input and mismatch minimization remain Phase 4 work.
 
 ## Boundaries
 

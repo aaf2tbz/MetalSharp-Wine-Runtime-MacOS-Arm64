@@ -71,7 +71,7 @@ static uint32_t commit(void *opaque, const struct blink_gem_write *writes, size_
 static void import_state(const struct gem_i386_context *source, struct blink_gem_state *target) {
     size_t i;
     memset(target, 0, sizeof(*target));
-    target->abi_version = 1U;
+    target->abi_version = BLINK_GEM_STATE_ABI_VERSION;
     target->size = sizeof(*target);
     for (i = 0; i < 8U; ++i)
         target->gpr[i] = source->gpr[i];
@@ -83,7 +83,22 @@ static void import_state(const struct gem_i386_context *source, struct blink_gem
     target->fcw = source->fcw;
     target->fsw = source->fsw;
     target->ftw = source->ftw;
-    target->fs_base = source->teb;
+    target->fop = source->fop;
+    if (source->layout_version >= GEM_I386_CONTEXT_LAYOUT_VERSION_V2) {
+        target->fip = source->x87_environment.fip;
+        target->fdp = source->x87_environment.fdp;
+        target->fcs = source->x87_environment.fcs;
+        target->fds = source->x87_environment.fds;
+    }
+    for (i = 0; i < 6U; ++i) {
+        target->segments[i].selector = source->segment[i];
+        target->segments[i].base = source->segment_base[i];
+        target->segments[i].limit = source->segment_limit[i];
+        target->segments[i].attributes = source->segment_attributes[i];
+    }
+    target->fs_base =
+        source->segment_base[GEM_I386_FS] != 0U ? source->segment_base[GEM_I386_FS] : source->teb;
+    target->gs_base = source->segment_base[GEM_I386_GS];
 }
 
 static void export_state(const struct blink_gem_state *source, const struct gem_i386_context *input,
@@ -101,7 +116,19 @@ static void export_state(const struct blink_gem_state *source, const struct gem_
     target->fcw = source->fcw;
     target->fsw = source->fsw;
     target->ftw = source->ftw;
-    target->teb = (uint32_t)source->fs_base;
+    target->fop = source->fop;
+    if (target->layout_version >= GEM_I386_CONTEXT_LAYOUT_VERSION_V2) {
+        target->x87_environment.fip = source->fip;
+        target->x87_environment.fdp = source->fdp;
+        target->x87_environment.fcs = source->fcs;
+        target->x87_environment.fds = source->fds;
+    }
+    for (i = 0; i < 6U; ++i) {
+        target->segment[i] = source->segments[i].selector;
+        target->segment_base[i] = source->segments[i].base;
+        target->segment_limit[i] = source->segments[i].limit;
+        target->segment_attributes[i] = source->segments[i].attributes;
+    }
 }
 
 bool gem_i386_blink_create(struct gem_i386_runtime *runtime) {
@@ -142,8 +169,13 @@ enum gem_stop_reason gem_i386_blink_step(struct gem_i386_runtime *runtime,
         export_state(&blink_out, in, out);
         return result.retired == 1U ? GEM_STOP_NONE : GEM_STOP_INVARIANT_VIOLATION;
     }
-    if (result.outcome == BLINK_GEM_MEMORY_FAULT)
+    if (result.outcome == BLINK_GEM_MEMORY_FAULT) {
+        if (result.engine_status == BLINK_GEM_ENGINE_STATUS_RESTARTABLE_REP) {
+            export_state(&blink_out, in, out);
+            runtime->last_stop.engine_status = GEM_I386_ENGINE_STATUS_RESTARTABLE_REP;
+        }
         return GEM_STOP_MEMORY_FAULT;
+    }
     if (result.outcome == BLINK_GEM_EXCEPTION) {
         switch (result.engine_status) {
         case BLINK_GEM_EXCEPTION_ILLEGAL_INSTRUCTION:
