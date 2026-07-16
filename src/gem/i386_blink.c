@@ -76,7 +76,7 @@ static void import_state(const struct gem_i386_context *source, struct blink_gem
     for (i = 0; i < 8U; ++i)
         target->gpr[i] = source->gpr[i];
     target->rip = source->eip;
-    target->rflags = source->eflags;
+    target->rflags = (source->eflags & ~UINT32_C(0x00003000)) | UINT32_C(0x00000200);
     memcpy(target->xmm, source->xmm, sizeof(source->xmm));
     memcpy(target->x87, source->x87, sizeof(source->x87));
     target->mxcsr = source->mxcsr;
@@ -93,7 +93,8 @@ static void export_state(const struct blink_gem_state *source, const struct gem_
     for (i = 0; i < 8U; ++i)
         target->gpr[i] = (uint32_t)source->gpr[i];
     target->eip = (uint32_t)source->rip;
-    target->eflags = (uint32_t)source->rflags | GEM_I386_EFLAGS_REQUIRED;
+    target->eflags = ((uint32_t)source->rflags & ~UINT32_C(0x00003000)) | UINT32_C(0x00000200) |
+                     GEM_I386_EFLAGS_REQUIRED;
     memcpy(target->xmm, source->xmm, sizeof(target->xmm));
     memcpy(target->x87, source->x87, sizeof(target->x87));
     target->mxcsr = source->mxcsr;

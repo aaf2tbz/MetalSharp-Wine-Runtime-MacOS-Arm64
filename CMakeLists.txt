@@ -163,6 +163,7 @@ if(MSWR_ENABLE_X64_ENGINE OR MSWR_ENABLE_I386_ENGINE)
         --sync-patch "${CMAKE_CURRENT_SOURCE_DIR}/third_party/patches/blink/0004-gem-batched-shadow-sync.patch"
         --rosetta-patch "${CMAKE_CURRENT_SOURCE_DIR}/third_party/patches/blink/0005-gem-rosetta-i386-conformance.patch"
         --rosetta-sse41-patch "${CMAKE_CURRENT_SOURCE_DIR}/third_party/patches/blink/0006-gem-rosetta-sse41-minmax.patch"
+        --phase1-patch "${CMAKE_CURRENT_SOURCE_DIR}/third_party/patches/blink/0007-gem-i386-stack-cmpxchg8b.patch"
         --provenance "${CMAKE_CURRENT_SOURCE_DIR}/docs/architecture/adr/0008-blink-embedding.provenance.json"
         RESULT_VARIABLE blink_audit_result)
     if(NOT blink_audit_result EQUAL 0)

@@ -203,6 +203,168 @@ for width, suffix, accumulator, source in ((8, "b", 7, 9), (16, "w", 7, 9)):
                         0x8d5, eax=accumulator, ebx=source,
                         memory=[0x00070007, 0x11223344, 0, 0, 0, 0, 0, 0], use_memory=True)
 
+# Phase 1 broadens the scalar corpus across encodings and operand forms. Keep
+# each program short, deterministic, and free of architecturally undefined
+# output so that a mismatch is actionable without additional filtering.
+for width, suffix, accumulator, source, values in (
+        (8, "b", "%al", "%bl", (0, 1, 0x7f, 0x80, 0xff)),
+        (16, "w", "%ax", "%bx", (0, 1, 0x7fff, 0x8000, 0xffff)),
+        (32, "l", "%eax", "%ebx", (0, 1, 0x7fffffff, 0x80000000, 0xffffffff))):
+    high = 0xa5a50000 if width != 32 else 0
+    for opname, mask in (("add", 0x8d5), ("adc", 0x8d5), ("sub", 0x8d5),
+                         ("sbb", 0x8d5), ("cmp", 0x8d5), ("test", 0x8c5),
+                         ("and", 0x8c5), ("or", 0x8c5), ("xor", 0x8c5)):
+        for index, value in enumerate(values):
+            other = values[-1 - index]
+            prefix = "stc\n" if opname in {"adc", "sbb"} and index & 1 else "clc\n"
+            add_matrix_case(f"phase1_reg{width}_{opname}_{index}",
+                            f"{prefix}{opname}{suffix} {source}, {accumulator}", mask,
+                            eax=high | value, ebx=high | other)
+    for immediate in (-128, -1, 0, 1, 7, 127, 128, 0x1234):
+        if width == 8 and not -128 <= immediate <= 0xff:
+            continue
+        immediate_name = f"neg{-immediate}" if immediate < 0 else f"pos{immediate}"
+        for opname, mask in (("add", 0x8d5), ("sub", 0x8d5), ("cmp", 0x8d5),
+                             ("and", 0x8c5), ("or", 0x8c5), ("xor", 0x8c5)):
+            add_matrix_case(f"phase1_imm{width}_{opname}_{immediate_name}",
+                            f"{opname}{suffix} ${immediate}, {accumulator}", mask,
+                            eax=high | values[3])
+
+MEMORY_WORDS = [0x807fff01, 0x12345678, 0x80000001, 0x7fffffff,
+                0xaaaaaaaa, 0x55555555, 0x01020304, 0xfefdfcfb]
+for width, suffix, source in ((8, "b", "%al"), (16, "w", "%ax"), (32, "l", "%eax")):
+    for offset in (0, 1, 2, 3, 4, 7, 12, 16, 23):
+        if offset + width // 8 > 32:
+            continue
+        for opname, mask in (("add", 0x8d5), ("sub", 0x8d5), ("cmp", 0x8d5),
+                             ("and", 0x8c5), ("or", 0x8c5), ("xor", 0x8c5)):
+            add_matrix_case(f"phase1_mem{width}_{opname}_off{offset}",
+                            f"{opname}{suffix} {source}, {offset}(%esi)", mask,
+                            eax=0x87654321, memory=MEMORY_WORDS, use_memory=True)
+        add_matrix_case(f"phase1_mem{width}_load_off{offset}",
+                        f"mov{suffix} {offset}(%esi), {source}", 0,
+                        eax=0xa5a5a5a5, memory=MEMORY_WORDS, use_memory=True)
+
+# Exercise ModR/M displacement and SIB encodings independently of arithmetic
+# semantics. ECX is deliberately retained in the observed state.
+for scale in (1, 2, 4, 8):
+    for index in (0, 1, 2):
+        for displacement in (0, 1, 4, 7):
+            address = index * scale + displacement
+            if address + 4 > 32:
+                continue
+            add_matrix_case(f"phase1_sib_load_s{scale}_i{index}_d{displacement}",
+                            f"movl {displacement}(%esi,%ecx,{scale}), %eax", 0,
+                            eax=0, ecx=index, memory=MEMORY_WORDS, use_memory=True)
+            add_matrix_case(f"phase1_sib_store_s{scale}_i{index}_d{displacement}",
+                            f"movl %eax, {displacement}(%esi,%ecx,{scale})", 0,
+                            eax=0x6a5b4c3d, ecx=index, memory=MEMORY_WORDS, use_memory=True)
+
+for relation, left, right in (
+        ("eq", 7, 7), ("ne", 7, 8), ("signed_lt", 0xffffffff, 1),
+        ("signed_ge", 1, 0xffffffff), ("unsigned_below", 1, 0xffffffff),
+        ("unsigned_above", 0xffffffff, 1)):
+    for branch in ("je", "jne", "jl", "jge", "jb", "ja"):
+        add_matrix_case(f"phase1_branch_{relation}_{branch}",
+                        f"cmpl %ebx, %eax\n{branch} 1f\n"
+                        "movl $0x11111111, %edx\njmp 2f\n"
+                        "1:\nmovl $0x22222222, %edx\n2:", 0x8d5,
+                        eax=left, ebx=right)
+
+for count in (0, 1, 2, 5):
+    add_matrix_case(f"phase1_loop_{count}",
+                    "xorl %eax, %eax\njecxz 2f\n1:\nincl %eax\nloop 1b\n2:",
+                    0x8c5 if count == 0 else 0x8d5,
+                    ecx=count)
+
+add_matrix_case("phase1_call_ret", "call 1f\nmovl $0x2468ace0, %edx\njmp 2f\n"
+                "1:\naddl $7, %eax\nretl\n2:", 0x8d5, eax=5)
+add_matrix_case("phase1_nested_call_ret", "call 1f\njmp 3f\n1:\ncall 2f\nretl\n"
+                "2:\nxorl $0x55aa55aa, %eax\nretl\n3:", 0x8c5, eax=0x12345678)
+add_matrix_case("phase1_stack_push_pop", "pushl %eax\npushl %ebx\npopl %eax\npopl %ebx",
+                0, eax=0x11223344, ebx=0xaabbccdd)
+add_matrix_case("phase1_stack_flags", "pushfl\npopl %eax\npushl %eax\npopfl", 0x8d5,
+                eax=0, eflags=0x8d7)
+add_matrix_case("phase1_stack_pushad", "pushal\nxorl %eax, %eax\nxorl %ebx, %ebx\n"
+                "xorl %ecx, %ecx\nxorl %edx, %edx\npopal", 0x8c5,
+                eax=1, ebx=2, ecx=3, edx=4, esi=5, edi=6)
+
+for width, suffix, values in (
+        (8, "b", ((0x00ff, 2), (0x7f00, 0x7f), (0x8000, 0xff))),
+        (16, "w", ((0x0000ffff, 2), (0x00007fff, 0x7fff), (0x00008000, 0xffff))),
+        (32, "l", ((0xffffffff, 2), (0x7fffffff, 3), (0x80000000, 0xffffffff)))):
+    for index, (value, multiplier) in enumerate(values):
+        add_matrix_case(f"phase1_mul{width}_{index}", f"mul{suffix} "
+                        f"{'%bl' if width == 8 else '%bx' if width == 16 else '%ebx'}",
+                        0x801, eax=value, ebx=multiplier)
+        add_matrix_case(f"phase1_imul{width}_{index}", f"imul{suffix} "
+                        f"{'%bl' if width == 8 else '%bx' if width == 16 else '%ebx'}",
+                        0x801, eax=value, ebx=multiplier)
+
+for index, (eax, edx, divisor) in enumerate(((100, 0, 7), (0xffffffff, 0, 255),
+                                              (0x80000000, 0, 65535))):
+    add_matrix_case(f"phase1_div32_{index}", "divl %ebx", 0,
+                    eax=eax, edx=edx, ebx=divisor)
+for index, (eax, edx, divisor) in enumerate(((0xffffff9c, 0xffffffff, 7),
+                                              (0x80000001, 0xffffffff, 0xffffffff),
+                                              (0x7fffffff, 0, 0xffff))):
+    add_matrix_case(f"phase1_idiv32_{index}", "idivl %ebx", 0,
+                    eax=eax, edx=edx, ebx=divisor)
+for immediate in (-128, -7, -1, 0, 1, 7, 127, 128, 0x1234):
+    add_matrix_case(f"phase1_imul3_{immediate & 0xffff:x}",
+                    f"imull ${immediate}, %ebx, %eax", 0x801,
+                    eax=0xaaaaaaaa, ebx=0x13579bdf)
+
+for width, suffix, register in ((8, "b", "%al"), (16, "w", "%ax")):
+    for opname in ("rol", "ror", "rcl", "rcr", "shl", "shr", "sar"):
+        for count in (0, 1, 2, 7, 8, 15, 16, 17, 31, 32, 33):
+            normalized = count & 0x1f
+            if normalized == 0:
+                mask = 0x8d5
+            elif opname in {"rol", "ror", "rcl", "rcr"}:
+                mask = 0x801 if normalized == 1 else 0x001
+            else:
+                mask = 0x8c5 if normalized == 1 else 0x0c5
+            add_matrix_case(f"phase1_shift{width}_{opname}_{count}",
+                            f"movb ${count}, %cl\n{opname}{suffix} %cl, {register}", mask,
+                            eax=0xa5a58081, eflags=0x203)
+    for offset in (0, 1, 3, 7):
+        add_matrix_case(f"phase1_shiftmem{width}_shl_off{offset}",
+                        f"shl{suffix} $1, {offset}(%esi)", 0x8c5,
+                        memory=MEMORY_WORDS, use_memory=True)
+        add_matrix_case(f"phase1_shiftmem{width}_ror_off{offset}",
+                        f"ror{suffix} $1, {offset}(%esi)", 0x801,
+                        memory=MEMORY_WORDS, use_memory=True)
+
+for opname in ("bt", "bts", "btr", "btc"):
+    for bit in (0, 1, 7, 15, 16, 31, 32, 63):
+        add_matrix_case(f"phase1_bitreg_{opname}_{bit}", f"{opname}l %ecx, %eax", 0x001,
+                        eax=0x80000001, ecx=bit)
+        add_matrix_case(f"phase1_bitmemreg_{opname}_{bit}",
+                        f"{opname}l %ecx, (%esi)", 0x001, ecx=bit,
+                        memory=MEMORY_WORDS, use_memory=True)
+
+for width, suffix, source in ((8, "b", "%al"), (16, "w", "%ax"), (32, "l", "%eax")):
+    for offset in (0, 1, 2, 3, 4, 7, 12, 15):
+        add_matrix_case(f"phase1_atomic_xchg{width}_off{offset}",
+                        f"xchg{suffix} {source}, {offset}(%esi)", 0,
+                        eax=0x12345678, memory=MEMORY_WORDS, use_memory=True)
+        add_matrix_case(f"phase1_atomic_xadd{width}_off{offset}",
+                        f"lock xadd{suffix} {source}, {offset}(%esi)", 0x8d5,
+                        eax=5, memory=MEMORY_WORDS, use_memory=True)
+        add_matrix_case(f"phase1_atomic_cmpxchg{width}_off{offset}",
+                        f"lock cmpxchg{suffix} "
+                        f"{'%bl' if width == 8 else '%bx' if width == 16 else '%ebx'}, "
+                        f"{offset}(%esi)", 0x8d5, eax=MEMORY_WORDS[0], ebx=9,
+                        memory=MEMORY_WORDS, use_memory=True)
+
+add_matrix_case("phase1_cmpxchg8b_success", "lock cmpxchg8b (%esi)", 0x040,
+                eax=0x807fff01, edx=0x12345678, ebx=0x89abcdef, ecx=0x01234567,
+                memory=MEMORY_WORDS, use_memory=True)
+add_matrix_case("phase1_cmpxchg8b_failure", "lock cmpxchg8b 1(%esi)", 0x040,
+                eax=0, edx=0, ebx=0x89abcdef, ecx=0x01234567,
+                memory=MEMORY_WORDS, use_memory=True)
+
 SIMD_CASES = (
     ("paddb", "paddb"), ("paddw", "paddw"), ("paddd", "paddd"),
     ("psubb", "psubb"), ("psubw", "psubw"), ("psubd", "psubd"),
@@ -286,9 +448,15 @@ def main():
     parser.add_argument("--work", required=True, type=Path)
     parser.add_argument("--case-timeout", type=int, default=5)
     parser.add_argument("--isolated", action="store_true")
+    parser.add_argument("--resume-evidence", type=Path)
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[2]
     work = args.work.resolve()
+    resume_by_name = {}
+    if args.resume_evidence:
+        resume = json.loads(args.resume_evidence.read_text(encoding="utf-8"))
+        resume_by_name = {row["name"]: row for row in resume["results"]
+                          if row.get("record") is not None}
     if work.exists(): shutil.rmtree(work)
     work.mkdir(parents=True)
     runtime = args.runtime.resolve()
@@ -316,11 +484,16 @@ def main():
                                           "esi": test["regs"][4], "edi": test["regs"][5],
                                           "eflags": test["regs"][6], "memory": test["memory"],
                                           "xmm0": test["xmm"], "useMemoryEsi": test["use_memory"]},
-                                "status": "ok" if run.returncode == 0 and record else "failed",
+                                "status": "ok" if record else "failed",
                                 "exitCode": run.returncode, "record": record,
                                 "stderr": run.stderr[-1000:] if not record else ""})
         else:
             for index, test in enumerate(CASES):
+                if test["name"] in resume_by_name:
+                    result = resume_by_name[test["name"]]
+                    result["status"] = "ok"
+                    results.append(result)
+                    continue
                 try:
                     run = subprocess.Popen(["/usr/bin/arch", "-x86_64", str(runtime / "bin/wine"),
                                             str(exe), str(index)], env=env, stdout=subprocess.PIPE,

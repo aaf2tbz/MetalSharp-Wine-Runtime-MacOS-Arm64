@@ -74,7 +74,7 @@ static int replay(const struct replay_case *test, enum gem_i386_engine_mode mode
     memset(&config, 0, sizeof(config));
     config.engine_mode = mode;
     config.host_return_sentinel = code_address + test->code_size;
-    config.max_budget = 16U;
+    config.max_budget = 64U;
     runtime = pass ? gem_i386_runtime_create(memory, &config) : NULL;
     pass = pass && runtime != NULL;
     gem_i386_context_initialize(&context, 0x7ffde000U);
@@ -89,7 +89,7 @@ static int replay(const struct replay_case *test, enum gem_i386_engine_mode mode
     context.gpr[GEM_I386_ESP] = stack_address + GEM_GUEST_PAGE_SIZE - 16U;
     context.xmm[0].lo = (uint64_t)test->xmm[0] | ((uint64_t)test->xmm[1] << 32U);
     context.xmm[0].hi = (uint64_t)test->xmm[2] | ((uint64_t)test->xmm[3] << 32U);
-    reason = pass ? gem_i386_runtime_run(runtime, &context, 16U) : GEM_STOP_INVARIANT_VIOLATION;
+    reason = pass ? gem_i386_runtime_run(runtime, &context, 64U) : GEM_STOP_INVARIANT_VIOLATION;
     pass = pass && reason == GEM_STOP_HOST_RETURN;
     if (pass) pass = gem_i386_memory_read(memory, data, observed_memory,
                                            sizeof(observed_memory)) == GEM_MEMORY_OK;

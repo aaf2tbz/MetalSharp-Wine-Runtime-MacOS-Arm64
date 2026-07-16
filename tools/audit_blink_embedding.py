@@ -318,11 +318,12 @@ def main():
     parser.add_argument("--sync-patch", type=Path, required=True)
     parser.add_argument("--rosetta-patch", type=Path, required=True)
     parser.add_argument("--rosetta-sse41-patch", type=Path, required=True)
+    parser.add_argument("--phase1-patch", type=Path, required=True)
     parser.add_argument("--provenance", type=Path, required=True)
     args = parser.parse_args()
 
     provenance = json.loads(args.provenance.read_text())
-    need(provenance["schemaVersion"] == 4, "provenance schema")
+    need(provenance["schemaVersion"] == 5, "provenance schema")
     need(provenance["revision"] == PINNED_REVISION, "revision")
     need(digest(args.patch) == provenance["patchSha256"], "patch hash")
     need(digest(args.jit_patch) == provenance["jitPatchSha256"], "JIT patch hash")
@@ -336,6 +337,7 @@ def main():
         digest(args.rosetta_sse41_patch) == provenance["rosettaSse41PatchSha256"],
         "Rosetta SSE4.1 patch hash",
     )
+    need(digest(args.phase1_patch) == provenance["phase1PatchSha256"], "phase 1 patch hash")
     for relative, expected_hash in provenance["postPatch"].items():
         need(digest(args.source / relative) == expected_hash, f"hash {relative}")
 

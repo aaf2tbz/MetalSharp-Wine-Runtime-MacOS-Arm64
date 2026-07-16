@@ -72,3 +72,8 @@ loaded compatibility shim; its legacy MMX encoding remains an invalid-opcode fau
 `7aca01d50c670da77df8c8366806b2de7d42c3a21ba47532c1e21b00d00aa9be`)
 completes the SSE4.1 packed integer min/max family exposed by the expanded Rosetta corpus:
 PMINSB, PMINSD, PMINUW, PMINUD, PMAXSB, PMAXSD, PMAXUW, and PMAXUD.
+
+`0007-gem-i386-stack-cmpxchg8b.patch` (SHA-256
+`817bf0e8592eb5f9223c32435867203d8a949ea25cb716d092fe237c3825b4b4`)
+routes PUSHA stack frames and CMPXCHG8B replacements through Blink's tracked
+write paths, and gives legacy PUSHF/POPF the Windows user-mode IF/IOPL view.

@@ -61,19 +61,22 @@ deterministic boundary cases.
 
 ## Current verified corpus
 
-The first broad PE32 matrix contains 514 fully defined cases and completed in a
-single 4.596-second carrier batch on macOS 27.0 (26A5378j). It covers 8-, 16-,
+The expanded PE32 matrix contains 1,458 fully defined cases and completed in a
+single 4.575-second carrier batch on macOS 27.0 (26A5378j). It covers 8-, 16-,
 and 32-bit arithmetic and flags; shifts, rotates and double shifts at masked
 count boundaries; bit scans and bit manipulation; aligned and unaligned locked
-memory operations; scalar moves; packed integer SSE2, SSSE3, and SSE4.1; and
-POPCNT/LZCNT/TZCNT. Rosetta produced a record for every case.
+memory operations; ModR/M and SIB addressing; branches, calls, returns, and
+stack frames; multiply and divide; scalar moves; packed integer SSE2, SSSE3,
+and SSE4.1; and POPCNT/LZCNT/TZCNT. Rosetta produced a record for every case.
 
-A freshly extracted Blink tree with patches 0001 through 0006 replayed every
-record in both the ARM64 interpreter and ARM64 JIT modes: 1,028 comparisons,
-1,028 matches, zero unsupported instructions, zero crashes, and zero semantic
+A freshly extracted Blink tree with patches 0001 through 0007 replayed every
+record in both the ARM64 interpreter and ARM64 JIT modes: 2,916 comparisons,
+2,916 matches, zero unsupported instructions, zero crashes, and zero semantic
 mismatches. The expanded run found and froze fixes for INC/NEG auxiliary carry,
 CMPXCHG subtraction direction, LZCNT, Blink embedding bus initialization for
-unaligned atomics, and the SSE4.1 packed integer min/max family.
+unaligned atomics, the SSE4.1 packed integer min/max family, transactional
+PUSHA/POPA stack frames, Windows user-mode PUSHF/POPF state, and CMPXCHG8B
+writeback.
 
 This result does not close the remaining coverage plan. Fault delivery and page
 crossings, x87/MMX state, string/REP instructions, segmentation, self-modifying
