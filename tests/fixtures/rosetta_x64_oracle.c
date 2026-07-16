@@ -58,8 +58,7 @@ static int is_translated(void) {
 static int run_dynamic(const struct code_range *range, struct rosetta_x64_record *record) {
     size_t code_size = (size_t)(range->end - range->start);
     size_t page_size = (size_t)getpagesize();
-    void *mapping = mmap(NULL, page_size, PROT_READ | PROT_WRITE,
-                         MAP_PRIVATE | MAP_ANON, -1, 0);
+    void *mapping = mmap(NULL, page_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
     if (mapping == MAP_FAILED || code_size > page_size)
         return 0;
     memcpy(mapping, range->start, code_size);

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "rosetta_i386_oracle.h"
 
-#define STD_OUTPUT_HANDLE ((oracle_u32)-11)
+#define STD_OUTPUT_HANDLE ((oracle_u32) - 11)
 
 __declspec(dllimport) void *__stdcall GetStdHandle(oracle_u32 which);
 __declspec(dllimport) int __stdcall WriteFile(void *file, const void *data, oracle_u32 size,

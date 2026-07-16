@@ -550,12 +550,12 @@ static struct gem_i386_context run_unaligned_xadd(enum gem_i386_engine_mode mode
                                   GEM_PAGE_EXECUTE_READWRITE) == GEM_MEMORY_OK);
     assert(gem_i386_memory_write(memory, code_address, code, sizeof(code)) == GEM_MEMORY_OK);
     assert(gem_i386_memory_reserve(memory, &data_address, GEM_GUEST_PAGE_SIZE) == GEM_MEMORY_OK);
-    assert(gem_i386_memory_commit(memory, data_address, GEM_GUEST_PAGE_SIZE,
-                                  GEM_PAGE_READWRITE) == GEM_MEMORY_OK);
+    assert(gem_i386_memory_commit(memory, data_address, GEM_GUEST_PAGE_SIZE, GEM_PAGE_READWRITE) ==
+           GEM_MEMORY_OK);
     assert(gem_i386_memory_write(memory, data_address, initial, sizeof(initial)) == GEM_MEMORY_OK);
     assert(gem_i386_memory_reserve(memory, &stack_address, GEM_GUEST_PAGE_SIZE) == GEM_MEMORY_OK);
-    assert(gem_i386_memory_commit(memory, stack_address, GEM_GUEST_PAGE_SIZE,
-                                  GEM_PAGE_READWRITE) == GEM_MEMORY_OK);
+    assert(gem_i386_memory_commit(memory, stack_address, GEM_GUEST_PAGE_SIZE, GEM_PAGE_READWRITE) ==
+           GEM_MEMORY_OK);
     config.engine_mode = mode;
     config.host_return_sentinel = code_address + (uint32_t)sizeof(code);
     config.max_budget = 1U;
@@ -591,12 +591,12 @@ static struct gem_i386_context run_sse41_minmax(enum gem_i386_engine_mode mode, 
                                   GEM_PAGE_EXECUTE_READWRITE) == GEM_MEMORY_OK);
     assert(gem_i386_memory_write(memory, code_address, code, sizeof(code)) == GEM_MEMORY_OK);
     assert(gem_i386_memory_reserve(memory, &data_address, GEM_GUEST_PAGE_SIZE) == GEM_MEMORY_OK);
-    assert(gem_i386_memory_commit(memory, data_address, GEM_GUEST_PAGE_SIZE,
-                                  GEM_PAGE_READWRITE) == GEM_MEMORY_OK);
+    assert(gem_i386_memory_commit(memory, data_address, GEM_GUEST_PAGE_SIZE, GEM_PAGE_READWRITE) ==
+           GEM_MEMORY_OK);
     assert(gem_i386_memory_write(memory, data_address, source, sizeof(source)) == GEM_MEMORY_OK);
     assert(gem_i386_memory_reserve(memory, &stack_address, GEM_GUEST_PAGE_SIZE) == GEM_MEMORY_OK);
-    assert(gem_i386_memory_commit(memory, stack_address, GEM_GUEST_PAGE_SIZE,
-                                  GEM_PAGE_READWRITE) == GEM_MEMORY_OK);
+    assert(gem_i386_memory_commit(memory, stack_address, GEM_GUEST_PAGE_SIZE, GEM_PAGE_READWRITE) ==
+           GEM_MEMORY_OK);
     config.engine_mode = mode;
     config.host_return_sentinel = code_address + (uint32_t)sizeof(code);
     config.max_budget = 1U;
@@ -669,8 +669,7 @@ int main(void) {
         assert(memcmp(&interpreter, &jit, sizeof(jit)) == 0);
     }
     {
-        static const uint8_t opcodes[] = {0x38U, 0x39U, 0x3aU, 0x3bU,
-                                          0x3cU, 0x3dU, 0x3eU, 0x3fU};
+        static const uint8_t opcodes[] = {0x38U, 0x39U, 0x3aU, 0x3bU, 0x3cU, 0x3dU, 0x3eU, 0x3fU};
         static const uint32_t expected[][4] = {
             {0x80ff8001U, 0x80ff80ffU, 0xffffffffU, 0x87344321U},
             {0x80ff7f01U, 0x80017fffU, 0xffffffffU, 0x87654321U},
