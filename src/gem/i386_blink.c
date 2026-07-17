@@ -11,18 +11,33 @@
 
 #define GEM_I386_TRACE_ID_SLOTS UINT32_C(0x1400)
 #define GEM_I386_TRACE_PATH_BYTES 4096
+#define GEM_I386_TRACE_FLUSH_ENTRIES_DEFAULT UINT64_C(16384)
 
 static atomic_uint_fast64_t trace_counts[GEM_I386_TRACE_ID_SLOTS];
 static atomic_uint_fast64_t trace_out_of_range;
 static atomic_uint_fast64_t trace_drained_total;
 static atomic_uint_fast64_t trace_overflow_events;
+static atomic_uint_fast64_t trace_since_flush;
 static pthread_mutex_t trace_write_mutex = PTHREAD_MUTEX_INITIALIZER;
 static char trace_path[GEM_I386_TRACE_PATH_BYTES];
 static atomic_bool trace_path_valid;
 
+static uint64_t gem_i386_blink_trace_flush_entries(void) {
+    const char *value = getenv(GEM_I386_HANDLER_TRACE_FLUSH_ENV_VAR);
+    char *end = NULL;
+    unsigned long parsed;
+    if (value == NULL || value[0] == '\0')
+        return GEM_I386_TRACE_FLUSH_ENTRIES_DEFAULT;
+    parsed = strtoul(value, &end, 10);
+    if (end == value || *end != '\0' || parsed == 0UL)
+        return GEM_I386_TRACE_FLUSH_ENTRIES_DEFAULT;
+    return (uint64_t)parsed;
+}
+
 static void gem_i386_blink_trace_init(struct gem_i386_runtime *runtime) {
     const char *path = getenv(GEM_I386_HANDLER_TRACE_ENV_VAR);
     runtime->trace_drain = false;
+    runtime->trace_flush_entries = GEM_I386_TRACE_FLUSH_ENTRIES_DEFAULT;
     if (path == NULL || path[0] == '\0' || strlen(path) >= sizeof(trace_path))
         return;
     pthread_mutex_lock(&trace_write_mutex);
@@ -31,7 +46,38 @@ static void gem_i386_blink_trace_init(struct gem_i386_runtime *runtime) {
         atomic_store_explicit(&trace_path_valid, true, memory_order_release);
     }
     pthread_mutex_unlock(&trace_write_mutex);
+    runtime->trace_flush_entries = gem_i386_blink_trace_flush_entries();
     runtime->trace_drain = true;
+}
+
+/* Caller must hold trace_write_mutex. */
+static void gem_i386_blink_trace_write_locked(void) {
+    FILE *file = fopen(trace_path, "w");
+    uint32_t id;
+    if (file == NULL)
+        return;
+    fprintf(file, "gem_i386_handler_trace 1\n");
+    fprintf(file, "total_drained %llu\n",
+            (unsigned long long)atomic_load_explicit(&trace_drained_total, memory_order_relaxed));
+    fprintf(file, "overflow_events %llu\n",
+            (unsigned long long)atomic_load_explicit(&trace_overflow_events, memory_order_relaxed));
+    fprintf(file, "out_of_range %llu\n",
+            (unsigned long long)atomic_load_explicit(&trace_out_of_range, memory_order_relaxed));
+    for (id = 0U; id < GEM_I386_TRACE_ID_SLOTS; ++id) {
+        uint64_t count = atomic_load_explicit(&trace_counts[id], memory_order_relaxed);
+        if (count != 0U)
+            fprintf(file, "handler %u %s %llu\n", id, blink_gem_handler_name(id),
+                    (unsigned long long)count);
+    }
+    fclose(file);
+}
+
+static void gem_i386_blink_trace_write(void) {
+    if (!atomic_load_explicit(&trace_path_valid, memory_order_acquire))
+        return;
+    pthread_mutex_lock(&trace_write_mutex);
+    gem_i386_blink_trace_write_locked();
+    pthread_mutex_unlock(&trace_write_mutex);
 }
 
 static void gem_i386_blink_trace_drain(struct gem_i386_runtime *runtime) {
@@ -55,35 +101,16 @@ static void gem_i386_blink_trace_drain(struct gem_i386_runtime *runtime) {
     if (info.overflowed != 0U)
         atomic_fetch_add_explicit(&trace_overflow_events, 1U, memory_order_relaxed);
     blink_gem_machine_trace_reset(runtime->backend);
-}
-
-static void gem_i386_blink_trace_write(void) {
-    FILE *file;
-    uint32_t id;
-    if (!atomic_load_explicit(&trace_path_valid, memory_order_acquire))
-        return;
-    pthread_mutex_lock(&trace_write_mutex);
-    file = fopen(trace_path, "w");
-    if (file != NULL) {
-        fprintf(file, "gem_i386_handler_trace 1\n");
-        fprintf(
-            file, "total_drained %llu\n",
-            (unsigned long long)atomic_load_explicit(&trace_drained_total, memory_order_relaxed));
-        fprintf(
-            file, "overflow_events %llu\n",
-            (unsigned long long)atomic_load_explicit(&trace_overflow_events, memory_order_relaxed));
-        fprintf(
-            file, "out_of_range %llu\n",
-            (unsigned long long)atomic_load_explicit(&trace_out_of_range, memory_order_relaxed));
-        for (id = 0U; id < GEM_I386_TRACE_ID_SLOTS; ++id) {
-            uint64_t count = atomic_load_explicit(&trace_counts[id], memory_order_relaxed);
-            if (count != 0U)
-                fprintf(file, "handler %u %s %llu\n", id, blink_gem_handler_name(id),
-                        (unsigned long long)count);
-        }
-        fclose(file);
+    if (i != 0U && atomic_fetch_add_explicit(&trace_since_flush, i, memory_order_relaxed) + i >=
+                       runtime->trace_flush_entries) {
+        /* Kill-proof periodic flush: rewrite the cumulative histogram so a
+         * process that never reaches runtime destroy still leaves bounded
+         * evidence behind. */
+        pthread_mutex_lock(&trace_write_mutex);
+        atomic_store_explicit(&trace_since_flush, 0, memory_order_relaxed);
+        gem_i386_blink_trace_write_locked();
+        pthread_mutex_unlock(&trace_write_mutex);
     }
-    pthread_mutex_unlock(&trace_write_mutex);
 }
 
 static bool i386_range(uint64_t address, uint64_t size) {

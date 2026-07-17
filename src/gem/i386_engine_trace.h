@@ -47,12 +47,16 @@ bool gem_i386_runtime_decode_attempt_info(const struct gem_i386_runtime *runtime
  * check is performed once per runtime creation and cached on the runtime, so
  * unset environments pay no per-instruction cost.  Each drain resets the Blink
  * buffer so its sticky overflow flag can never silently drop counts; every
- * observed overflow is recorded as an overflow event instead.  Destroying a
+ * observed overflow is recorded as an overflow event instead.  Every
+ * MSWR_I386_HANDLER_TRACE_FLUSH_ENTRIES newly drained entries (default 16384)
+ * the cumulative histogram is rewritten immediately, so a process killed
+ * before runtime destroy still leaves bounded evidence behind.  Destroying a
  * drain-enabled runtime rewrites the file with the cumulative process-wide
  * histogram, so repeated runtime lifetimes in one process deterministically
  * produce the aggregate of all drained entries up to that point.  The drain is
  * diagnostic-only: it never changes execution, budgets, or committed state. */
 #define GEM_I386_HANDLER_TRACE_ENV_VAR "MSWR_I386_HANDLER_TRACE_PATH"
+#define GEM_I386_HANDLER_TRACE_FLUSH_ENV_VAR "MSWR_I386_HANDLER_TRACE_FLUSH_ENTRIES"
 
 #ifdef __cplusplus
 }

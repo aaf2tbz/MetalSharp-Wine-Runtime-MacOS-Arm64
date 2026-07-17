@@ -200,13 +200,67 @@ static void exercise_drain(void) {
     assert(strstr(contents, "handler 1 OpNop 2\n") != NULL);
     assert(strstr(contents, "handler 2 OpMovZvqpIvqp 2\n") != NULL);
     assert(strstr(contents, "handler 6 OpAlui 2\n") != NULL);
+}
+
+static void exercise_periodic_flush(void) {
+    struct gem_i386_runtime *runtime;
+    struct gem_i386_context context;
+    struct gem_i386_context output;
+    struct gem_memory *memory;
+    const char *contents;
+    uint32_t code_address;
+    uint32_t stack_address;
+    uint32_t retired = 0U;
+    assert(setenv(GEM_I386_HANDLER_TRACE_FLUSH_ENV_VAR, "2", 1) == 0);
+    memory = create_memory(&code_address, &stack_address);
+    runtime = create_runtime(memory, GEM_I386_ENGINE_JIT, code_address);
+    context = initial_context(code_address, stack_address);
+
+    /* The first step pushes the process-wide flush counter past the tiny
+     * threshold, so the cumulative histogram is rewritten mid-run, before any
+     * destroy: a killed process would still leave this evidence behind. */
+    runtime->transaction = gem_memory_transaction_begin(memory);
+    assert(runtime->transaction != NULL);
+    runtime->ops->sync(runtime);
+    assert(runtime->ops->step(runtime, &context, &output, &retired) == GEM_STOP_NONE);
+    assert(retired == 1U);
+    contents = read_output();
+    assert(strstr(contents, "total_drained 7\n") != NULL);
+    assert(strstr(contents, "handler 1 OpNop 3\n") != NULL);
+    assert(strstr(contents, "handler 2 OpMovZvqpIvqp 2\n") != NULL);
+
+    /* One more entry stays below the threshold: no flush, file unchanged. */
+    assert(runtime->ops->step(runtime, &output, &context, &retired) == GEM_STOP_NONE);
+    assert(retired == 1U);
+    contents = read_output();
+    assert(strstr(contents, "total_drained 7\n") != NULL);
+    gem_memory_transaction_end(runtime->transaction);
+    runtime->transaction = NULL;
+
+    /* Crossing the threshold again flushes the full cumulative histogram,
+     * still without any destroy. */
+    assert(gem_i386_runtime_run(runtime, &context, 1U) == GEM_STOP_HOST_RETURN);
+    contents = read_output();
+    assert(strstr(contents, "total_drained 9\n") != NULL);
+    assert(strstr(contents, "handler 1 OpNop 3\n") != NULL);
+    assert(strstr(contents, "handler 2 OpMovZvqpIvqp 3\n") != NULL);
+    assert(strstr(contents, "handler 6 OpAlui 3\n") != NULL);
+
+    /* Destroy still rewrites the same final state. */
+    gem_i386_runtime_destroy(runtime);
+    gem_memory_destroy(memory);
+    contents = read_output();
+    assert(strstr(contents, "total_drained 9\n") != NULL);
+    assert(unsetenv(GEM_I386_HANDLER_TRACE_FLUSH_ENV_VAR) == 0);
     assert(remove(TRACE_OUTPUT_PATH) == 0);
 }
 
 int main(void) {
     assert(unsetenv(GEM_I386_HANDLER_TRACE_ENV_VAR) == 0);
+    assert(unsetenv(GEM_I386_HANDLER_TRACE_FLUSH_ENV_VAR) == 0);
     remove(TRACE_OUTPUT_PATH);
     exercise_accessors();
     exercise_drain();
+    exercise_periodic_flush();
     return 0;
 }

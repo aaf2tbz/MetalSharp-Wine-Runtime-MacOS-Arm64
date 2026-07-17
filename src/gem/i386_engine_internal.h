@@ -23,6 +23,7 @@ struct gem_i386_runtime {
     bool running;
     bool backend_failed;
     bool trace_drain;
+    uint64_t trace_flush_entries;
     atomic_bool async_stop_requested;
 };
 
