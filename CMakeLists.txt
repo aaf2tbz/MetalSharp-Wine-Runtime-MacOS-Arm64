@@ -479,6 +479,18 @@ if(BUILD_TESTING)
             COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/ci/test-phase4-tools.py")
         set_tests_properties(tools.i386_phase4_harness PROPERTIES
             LABELS "i386;randomized-differential;harness")
+
+        add_executable(i386_handler_map_probe tools/i386/i386_handler_map_probe.c)
+        target_link_libraries(i386_handler_map_probe PRIVATE metalsharp_gem)
+        target_include_directories(i386_handler_map_probe PRIVATE
+            "${blink_gem_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/src/gem")
+        mswr_enable_warnings(i386_handler_map_probe)
+
+        add_test(NAME tools.i386_trace_coverage
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/ci/test-trace-coverage-tools.py")
+        set_tests_properties(tools.i386_trace_coverage PROPERTIES
+            LABELS "i386;harness"
+            ENVIRONMENT "MSWR_I386_MAP_PROBE=$<TARGET_FILE:i386_handler_map_probe>")
     endif()
 
     if(MSWR_ARM64X_ROUNDTRIP_ARTIFACT_DIR)
