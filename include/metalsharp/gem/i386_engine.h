@@ -28,6 +28,7 @@ extern "C" {
 #define GEM_I386_EXCEPTION_STACK_OVERFLOW UINT32_C(5)
 #define GEM_I386_EXCEPTION_GENERAL_PROTECTION UINT32_C(6)
 #define GEM_I386_PERFORMANCE_INFO_ABI_VERSION UINT32_C(1)
+#define GEM_I386_PERFORMANCE_INFO_V2_ABI_VERSION UINT32_C(2)
 
 struct gem_i386_runtime;
 
@@ -96,6 +97,27 @@ struct gem_i386_performance_info {
     uint64_t lock_wait_nanoseconds;
 };
 
+/* Versioned extension; the v1 query and its 88-byte layout remain unchanged. */
+struct gem_i386_performance_info_v2 {
+    uint32_t abi_version;
+    uint32_t size;
+    uint64_t retired_instructions;
+    uint64_t quanta;
+    uint64_t retries;
+    uint64_t page_snapshots;
+    uint64_t bytes_copied;
+    uint64_t bytes_committed;
+    uint64_t state_imports;
+    uint64_t state_exports;
+    uint64_t decode_resets;
+    uint64_t lock_wait_nanoseconds;
+    uint64_t jit_compilations;
+    uint64_t jit_executions;
+    uint64_t jit_cache_hits;
+    uint64_t jit_failures;
+    uint64_t code_invalidations;
+};
+
 struct gem_i386_runtime *gem_i386_runtime_create(struct gem_memory *memory,
                                                  const struct gem_i386_runtime_config *config);
 void gem_i386_runtime_destroy(struct gem_i386_runtime *runtime);
@@ -107,6 +129,8 @@ bool gem_i386_runtime_engine_info(const struct gem_i386_runtime *runtime,
                                   struct gem_i386_engine_info *out);
 bool gem_i386_runtime_performance_info(const struct gem_i386_runtime *runtime,
                                        struct gem_i386_performance_info *out);
+bool gem_i386_runtime_performance_info_v2(const struct gem_i386_runtime *runtime,
+                                          struct gem_i386_performance_info_v2 *out);
 void gem_i386_runtime_invalidate_code(struct gem_i386_runtime *runtime, uint32_t address,
                                       uint64_t size);
 void gem_i386_runtime_request_async_stop(struct gem_i386_runtime *runtime);

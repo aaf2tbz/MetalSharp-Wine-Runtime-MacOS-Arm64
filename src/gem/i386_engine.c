@@ -207,11 +207,48 @@ bool gem_i386_runtime_performance_info(const struct gem_i386_runtime *runtime,
     return true;
 }
 
+bool gem_i386_runtime_performance_info_v2(const struct gem_i386_runtime *runtime,
+                                          struct gem_i386_performance_info_v2 *out) {
+    struct gem_i386_engine_info engine = {0};
+    if (runtime == NULL || out == NULL ||
+        out->abi_version != GEM_I386_PERFORMANCE_INFO_V2_ABI_VERSION || out->size != sizeof(*out))
+        return false;
+    engine.abi_version = 1U;
+    engine.size = sizeof(engine);
+    if (!runtime->ops->engine_info(runtime, &engine))
+        return false;
+    memset(out, 0, sizeof(*out));
+    out->abi_version = GEM_I386_PERFORMANCE_INFO_V2_ABI_VERSION;
+    out->size = sizeof(*out);
+    out->retired_instructions = runtime->performance.retired_instructions;
+    out->quanta = runtime->performance.quanta;
+    out->retries = runtime->performance.retries;
+    out->page_snapshots = runtime->performance.page_snapshots;
+    out->bytes_copied = runtime->performance.bytes_copied;
+    out->bytes_committed = runtime->performance.bytes_committed;
+    out->state_imports = runtime->performance.state_imports;
+    out->state_exports = runtime->performance.state_exports;
+    out->decode_resets = runtime->performance.decode_resets;
+    out->lock_wait_nanoseconds = runtime->performance.lock_wait_nanoseconds;
+    out->jit_compilations = engine.jit_compilations;
+    out->jit_executions = engine.jit_executions;
+    out->jit_cache_hits = engine.jit_executions > engine.jit_compilations
+                              ? engine.jit_executions - engine.jit_compilations
+                              : 0U;
+    out->jit_failures = engine.jit_failures;
+    out->code_invalidations = runtime->code_invalidations;
+    return true;
+}
+
 void gem_i386_runtime_invalidate_code(struct gem_i386_runtime *runtime, uint32_t address,
                                       uint64_t size) {
-    if (runtime != NULL &&
-        (runtime->running || !runtime->ops->invalidate_code(runtime, address, size)))
+    if (runtime == NULL)
+        return;
+    if (runtime->running || !runtime->ops->invalidate_code(runtime, address, size)) {
         runtime->backend_failed = true;
+        return;
+    }
+    ++runtime->code_invalidations;
 }
 
 void gem_i386_runtime_request_async_stop(struct gem_i386_runtime *runtime) {

@@ -18,6 +18,8 @@
 
 _Static_assert(sizeof(struct gem_i386_performance_info) == 88U,
                "performance query ABI size changed");
+_Static_assert(sizeof(struct gem_i386_performance_info_v2) == 128U,
+               "performance v2 query ABI size changed");
 
 struct fixture {
     struct gem_memory *memory;
@@ -180,6 +182,8 @@ static void verify_three_way_boundaries(void) {
     struct equality_lane jit_lane = equality_lane_create(GEM_I386_ENGINE_JIT);
     struct gem_i386_engine_info bounded_info = {0};
     struct gem_i386_engine_info jit_info = {0};
+    struct gem_i386_performance_info_v2 jit_performance = {
+        .abi_version = GEM_I386_PERFORMANCE_INFO_V2_ABI_VERSION, .size = sizeof(jit_performance)};
     uint32_t budget;
     for (budget = 1U; budget <= 256U; ++budget) {
         struct gem_i386_context stepped = equality_initial_context(&stepped_lane);
@@ -231,6 +235,9 @@ static void verify_three_way_boundaries(void) {
            bounded_info.jit_failures == 0U);
     assert(jit_info.jit_compilations != 0U && jit_info.jit_executions != 0U &&
            jit_info.jit_failures == 0U);
+    assert(gem_i386_runtime_performance_info_v2(jit_lane.runtime, &jit_performance));
+    assert(jit_performance.jit_cache_hits != 0U && jit_performance.jit_failures == 0U &&
+           jit_performance.code_invalidations == 0U);
     equality_lane_destroy(&jit_lane);
     equality_lane_destroy(&bounded_lane);
     equality_lane_destroy(&stepped_lane);
@@ -307,6 +314,7 @@ int main(void) {
     struct gem_i386_context stepped;
     struct gem_i386_context batched;
     struct gem_i386_performance_info performance;
+    struct gem_i386_performance_info_v2 performance_v2;
     uint64_t step_samples[GEM_PHASE55_PERFORMANCE_SAMPLES];
     uint64_t run_samples[GEM_PHASE55_PERFORMANCE_SAMPLES];
     uint64_t step_ns, run_ns;
@@ -349,6 +357,17 @@ int main(void) {
     assert(performance.retired_instructions >= budget);
     assert(performance.quanta < performance.retired_instructions);
     assert(performance.state_imports == performance.quanta);
+    memset(&performance_v2, 0, sizeof(performance_v2));
+    assert(!gem_i386_runtime_performance_info_v2(fixture.run_runtime, &performance_v2));
+    performance_v2.abi_version = GEM_I386_PERFORMANCE_INFO_V2_ABI_VERSION;
+    performance_v2.size = sizeof(performance_v2);
+    assert(gem_i386_runtime_performance_info_v2(fixture.run_runtime, &performance_v2));
+    assert(performance_v2.retired_instructions == performance.retired_instructions);
+    assert(performance_v2.quanta == performance.quanta);
+    assert(performance_v2.state_imports == performance.state_imports);
+    assert(performance_v2.jit_compilations == 0U && performance_v2.jit_executions == 0U &&
+           performance_v2.jit_cache_hits == 0U && performance_v2.jit_failures == 0U);
+    assert(performance_v2.code_invalidations == 0U);
     speedup = (double)step_ns / (double)run_ns;
     printf("phase55 median_step_ns=%llu median_run_ns=%llu speedup=%.3fx required=%.3fx "
            "quanta=%llu\n",
