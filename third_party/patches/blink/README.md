@@ -247,3 +247,11 @@ integer arithmetic, comparisons, packing, unpacking, shuffles, blends,
 movemasks, and immediate/shared-count shifts. Lane-local operations reuse
 reviewed portable 128-bit semantics; count shifts use an exact 128-bit count
 operand for both YMM lanes and preserve precise memory access widths.
+
+`0034-gem-i386-avx2-data-movement.patch` (SHA-256
+`bec443bd36816f37bba0bec99a7205f1adbbc4bacef307cf39c093658fbca676`)
+extends native AVX2 with all twelve signed/unsigned widening conversions,
+register and memory broadcasts, 128-bit lane insertion/extraction, variable
+dword and immediate qword permutation, cross-lane permutation, and dword
+blending. Narrow memory conversions read exactly their architectural operand
+width, including a page-boundary no-overread witness.

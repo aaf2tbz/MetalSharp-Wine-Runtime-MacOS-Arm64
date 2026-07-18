@@ -192,6 +192,7 @@ if(MSWR_ENABLE_X64_ENGINE OR MSWR_ENABLE_I386_ENGINE)
         --avx-inventory-patch "${CMAKE_CURRENT_SOURCE_DIR}/third_party/patches/blink/0031-gem-i386-avx-inventory-closures.patch"
         --avx-cpuid-patch "${CMAKE_CURRENT_SOURCE_DIR}/third_party/patches/blink/0032-gem-i386-avx-cpuid.patch"
         --avx2-packed-patch "${CMAKE_CURRENT_SOURCE_DIR}/third_party/patches/blink/0033-gem-i386-avx2-packed-lanes.patch"
+        --avx2-data-patch "${CMAKE_CURRENT_SOURCE_DIR}/third_party/patches/blink/0034-gem-i386-avx2-data-movement.patch"
         --capability-manifest "${CMAKE_CURRENT_SOURCE_DIR}/docs/architecture/adr/i386-phase3-capabilities.json"
         --phase3-corpus "${CMAKE_CURRENT_SOURCE_DIR}/tests/i386_phase3_conformance.c"
         --provenance "${CMAKE_CURRENT_SOURCE_DIR}/docs/architecture/adr/0008-blink-embedding.provenance.json"

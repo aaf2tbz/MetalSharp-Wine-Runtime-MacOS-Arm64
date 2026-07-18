@@ -191,9 +191,12 @@ The selected guest is i386 legacy32 (Windows WoW64):
   classes and 302 encoding-pattern records across `datafiles/hswavx`. Patch
   0033 deliberately implements the first native slice: 256-bit packed integer
   arithmetic, comparison, packing/unpacking, lane-local map-2/map-3 shuffles,
-  blends, movemasks, and immediate/shared-count shifts. The remaining
-  widening, cross-lane permutation, broadcast, masked-memory, gather, and
-  per-element variable-shift groups stay fail-closed until implemented;
+  blends, movemasks, and immediate/shared-count shifts. Patch 0034 adds every
+  signed/unsigned widening form, broadcasts, lane insert/extract, variable and
+  immediate permutation, cross-lane permutation, and dword blending, with
+  exact-width page-boundary memory tests. The remaining masked-memory, gather,
+  non-temporal load, and per-element variable-shift groups stay fail-closed
+  until implemented;
   therefore AVX2 CPUID remains masked for now, based on SharpWine's own
   incomplete inventory rather than an oracle limitation.
 

@@ -42,7 +42,7 @@ class TraceCoverageToolTests(unittest.TestCase):
         self.assertEqual(by_id[131]["bytes"], bytes([0xff, 0xc0]))
         self.assertEqual(by_id[209]["bytes"], bytes([0x33, 0x06]))
         self.assertEqual(by_id[500]["bytes"], bytes([0xf3, 0xa4]))
-        self.assertEqual(by_id[601]["bytes"], bytes([0xc4, 0xe2, 0x75, 0x36, 0xc2]))
+        self.assertEqual(by_id[601]["bytes"], bytes([0xc4, 0xe2, 0x75, 0x47, 0xc2]))
         self.assertFalse(by_id[100]["negative"])
         self.assertTrue(all(by_id[key]["negative"] for key in (600, 601, 602, 603)))
 
