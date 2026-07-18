@@ -20,6 +20,7 @@ from typing import Any
 SCHEMA = 1
 SHARDS = 16
 CASES_PER_SHARD = 4096
+NON_AUTHORITATIVE_BASELINE_TEMPLATES = frozenset({300, 301})
 CLASSIFICATIONS = {
     "pass",
     "semantic-mismatch",
@@ -106,18 +107,45 @@ def classify_triplet(baseline: dict[str, Any], interpreter: dict[str, Any],
         return "unsupported-advertised"
     if int(j_record.get("jitExecutions", 0)) == 0 and j_record.get("category") != "negative":
         return "jit-fallback"
-    hashes = {b_record.get("compatibilityHash"), i_record.get("compatibilityHash"),
-              j_record.get("compatibilityHash")}
-    if None in hashes or len(hashes) != 1:
+    template_ids = {record.get("templateId") for record in (b_record, i_record, j_record)}
+    if None in template_ids or len(template_ids) != 1:
+        return "semantic-mismatch"
+    template_id = int(template_ids.pop())
+    engine_hashes = {i_record.get("compatibilityHash"), j_record.get("compatibilityHash")}
+    if None in engine_hashes or len(engine_hashes) != 1:
+        return "semantic-mismatch"
+    if template_id in NON_AUTHORITATIVE_BASELINE_TEMPLATES:
+        if i_record.get("sdmExpectation") is not True or j_record.get("sdmExpectation") is not True:
+            return "semantic-mismatch"
+        return "pass"
+    if b_record.get("compatibilityHash") not in engine_hashes:
         return "semantic-mismatch"
     return "pass"
+
+
+def comparison_metadata(baseline: dict[str, Any], interpreter: dict[str, Any],
+                        jit: dict[str, Any]) -> dict[str, Any]:
+    records = [result.get("record") for result in (baseline, interpreter, jit)]
+    template_ids = {record.get("templateId") for record in records if record}
+    template_id = next(iter(template_ids)) if len(template_ids) == 1 else None
+    authoritative = template_id not in NON_AUTHORITATIVE_BASELINE_TEMPLATES
+    hashes = [record.get("compatibilityHash") if record else None for record in records]
+    return {
+        "baselineAuthoritative": authoritative,
+        "baselineMatched": None not in hashes and len(set(hashes)) == 1,
+        "comparisonPolicy": "three-way-exact" if authoritative else "interpreter-jit-sdm",
+    }
 
 
 def run_case(args: argparse.Namespace, shard: int, case: int) -> dict[str, Any]:
     lane = (shard * CASES_PER_SHARD + case) % 4
     environment = os.environ.copy()
     environment["MSWR_PHASE4_LANE"] = str(lane)
-    baseline = run_worker(render(args.baseline_command, shard, case, lane), args.timeout, environment)
+    if args.baseline_results:
+        baseline = args.saved_baselines[(shard, case)]
+    else:
+        baseline = run_worker(render(args.baseline_command, shard, case, lane), args.timeout,
+                              environment)
     interpreter = run_worker(
         [str(args.worker), "--shard", str(shard), "--case", str(case), "--mode",
          "interpreter", "--json"], args.timeout, environment)
@@ -126,7 +154,8 @@ def run_case(args: argparse.Namespace, shard: int, case: int) -> dict[str, Any]:
          "--json"], args.timeout, environment)
     classification = classify_triplet(baseline, interpreter, jit)
     return {"shard": shard, "case": case, "lane": lane, "classification": classification,
-            "baseline": baseline, "interpreter": interpreter, "jit": jit}
+            **comparison_metadata(baseline, interpreter, jit), "baseline": baseline,
+            "interpreter": interpreter, "jit": jit}
 
 
 def cleanup(args: argparse.Namespace) -> None:
@@ -142,6 +171,8 @@ def cleanup(args: argparse.Namespace) -> None:
 
 
 def prepare_baselines(args: argparse.Namespace) -> None:
+    if args.baseline_results:
+        return
     cleanup(args)
     for lane in range(4):
         result = run_worker(render(args.baseline_command, 0, lane, lane), 10.0)
@@ -149,11 +180,36 @@ def prepare_baselines(args: argparse.Namespace) -> None:
             raise RuntimeError(f"baseline lane {lane} failed initialization: {result}")
 
 
+def load_saved_baselines(path: Path, shards: list[int], cases: int) -> dict[tuple[int, int], dict[str, Any]]:
+    selected = set(shards)
+    baselines: dict[tuple[int, int], dict[str, Any]] = {}
+    with path.open(encoding="utf-8") as source:
+        for line_number, line in enumerate(source, 1):
+            row = json.loads(line)
+            shard = row.get("shard")
+            case = row.get("case")
+            if shard not in selected or not isinstance(case, int) or not 0 <= case < cases:
+                continue
+            identity = (int(shard), case)
+            baseline = row.get("baseline")
+            if identity in baselines or not isinstance(baseline, dict) or \
+               baseline.get("classification") != "pass" or not baseline.get("record"):
+                raise ValueError(f"invalid saved baseline at line {line_number}")
+            baselines[identity] = baseline
+    expected = len(shards) * cases
+    if len(baselines) != expected:
+        raise ValueError(f"expected {expected} saved baselines, found {len(baselines)}")
+    return baselines
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--worker", required=True, type=Path)
-    parser.add_argument("--baseline-command", required=True,
-                        help="command template with {shard}, {case}, and optional {lane}")
+    baseline_source = parser.add_mutually_exclusive_group(required=True)
+    baseline_source.add_argument("--baseline-command",
+                                 help="command template with {shard}, {case}, and optional {lane}")
+    baseline_source.add_argument("--baseline-results", type=Path,
+                                 help="completed prior results whose passing baseline records are reused")
     parser.add_argument("--cleanup-command", help="four-lane cleanup command template")
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--shards", default="0", help="comma list, range A-B, or 'all'")
@@ -175,11 +231,19 @@ def main() -> int:
         shards = [int(value) for value in args.shards.split(",")]
     if not shards or min(shards) < 0 or max(shards) >= SHARDS:
         parser.error("invalid shard selection")
+    if args.baseline_results:
+        if not args.baseline_results.is_file():
+            parser.error("saved baseline results do not exist")
+        if (args.output / "phase4-results.jsonl").resolve() == args.baseline_results.resolve():
+            parser.error("saved baseline input and replay output must differ")
+        args.saved_baselines = load_saved_baselines(args.baseline_results, shards, args.cases)
     args.output.mkdir(parents=True, exist_ok=True)
     prepare_baselines(args)
     rows_path = args.output / "phase4-results.jsonl"
     started = time.monotonic()
     totals = {name: 0 for name in sorted(CLASSIFICATIONS)}
+    policy_totals = {"authoritative": 0, "nonAuthoritative": 0,
+                     "nonAuthoritativeMismatches": 0}
     try:
         with rows_path.open("w", encoding="utf-8") as output:
             identities = ((shard, case) for shard in shards for case in range(args.cases))
@@ -193,6 +257,12 @@ def main() -> int:
                 while pending:
                     row = pending.popleft().result()
                     totals[row["classification"]] += 1
+                    if row["baselineAuthoritative"]:
+                        policy_totals["authoritative"] += 1
+                    else:
+                        policy_totals["nonAuthoritative"] += 1
+                        if not row["baselineMatched"]:
+                            policy_totals["nonAuthoritativeMismatches"] += 1
                     output.write(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n")
                     identity = next(identities, None)
                     if identity is not None:
@@ -205,12 +275,15 @@ def main() -> int:
         1 for line in rows_path.read_text(encoding="utf-8").splitlines()
         if json.loads(line)["baseline"]["classification"] == "pass"
     )
-    summary = {"schemaVersion": SCHEMA, "generatorVersion": 1, "templateRevision": 1,
+    summary = {"schemaVersion": SCHEMA, "generatorVersion": 2, "templateRevision": 1,
                "masterSeed": "0x534841525057494e", "shards": shards, "cases": cases,
                "baselineRecords": baseline_records,
-               "nativeComparisons": cases * 2, "parityComparisons": cases,
+               "nativeComparisons": policy_totals["authoritative"] * 2,
+               "parityComparisons": cases, "comparisonPolicies": policy_totals,
                "totals": totals, "resultsSha256": digest,
                "elapsedMilliseconds": int((time.monotonic() - started) * 1000)}
+    if args.baseline_results:
+        summary["baselineSourceSha256"] = hashlib.sha256(args.baseline_results.read_bytes()).hexdigest()
     summary_path = args.output / "phase4-summary.json"
     summary_path.write_text(json.dumps(summary, sort_keys=True, indent=2) + "\n", encoding="utf-8")
     print(summary_path)

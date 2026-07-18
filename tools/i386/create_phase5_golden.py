@@ -12,6 +12,7 @@ MAGIC = b"SWP5GLD1"
 SCHEMA = 1
 MASTER_SEED = 0x534841525057494E
 CASES_PER_SHARD = 4096
+NON_AUTHORITATIVE_BASELINE_TEMPLATES = frozenset({300, 301})
 
 
 def main() -> int:
@@ -38,7 +39,24 @@ def main() -> int:
                        ("baseline", "interpreter", "jit")]
             if any(not record for record in records):
                 raise ValueError(f"missing record at {shard}/{ordinal}")
-            values = {record.get("compatibilityHash") for record in records}
+            baseline, interpreter, jit = records
+            template_ids = {record.get("templateId") for record in records}
+            if len(template_ids) != 1 or None in template_ids:
+                raise ValueError(f"template mismatch at {shard}/{ordinal}")
+            template_id = int(template_ids.pop())
+            if template_id in NON_AUTHORITATIVE_BASELINE_TEMPLATES:
+                if row.get("baselineAuthoritative") is not False or \
+                   row.get("comparisonPolicy") != "interpreter-jit-sdm":
+                    raise ValueError(f"missing non-authoritative policy at {shard}/{ordinal}")
+                if interpreter.get("sdmExpectation") is not True or \
+                   jit.get("sdmExpectation") is not True:
+                    raise ValueError(f"SDM expectation failed at {shard}/{ordinal}")
+                values = {interpreter.get("compatibilityHash"), jit.get("compatibilityHash")}
+            else:
+                if row.get("baselineAuthoritative") is not True or \
+                   row.get("comparisonPolicy") != "three-way-exact":
+                    raise ValueError(f"missing authoritative policy at {shard}/{ordinal}")
+                values = {record.get("compatibilityHash") for record in records}
             if len(values) != 1 or None in values:
                 raise ValueError(f"compatibility mismatch at {shard}/{ordinal}")
             hashes.append(int(values.pop(), 16))
