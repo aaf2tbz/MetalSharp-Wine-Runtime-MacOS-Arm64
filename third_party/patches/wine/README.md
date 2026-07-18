@@ -209,3 +209,11 @@ records the last genuinely unsupported decoded opcode, and publishes the exact
 deterministic CPUID profile. These values are observations of SharpWine's
 native implementation; external execution remains comparison evidence rather
 than a capability veto.
+
+Patch `0022` services guest-resident GEM syscall and Unix-call boundaries when
+native Darwin ARM64 Wine code re-enters them during an outer translated call.
+It dispatches the requested service through Wine's native tables and restores
+the ARM64 syscall-stub continuation instead of converting the boundary `svc`
+into an access violation. This keeps alias probing and other native WoW64 GUI
+work inside the implemented GEM/Wine path; it does not mask or discard the
+guest operation.
