@@ -9,6 +9,7 @@
 #include <stdatomic.h>
 
 #define GEM_I386_ENGINE_STATUS_RESTARTABLE_REP UINT32_C(0x100)
+#define GEM_I386_ENGINE_STATUS_RESTARTABLE_GATHER UINT32_C(0x101)
 
 struct gem_i386_runtime {
     struct gem_memory *memory;

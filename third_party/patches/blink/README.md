@@ -255,3 +255,16 @@ register and memory broadcasts, 128-bit lane insertion/extraction, variable
 dword and immediate qword permutation, cross-lane permutation, and dword
 blending. Narrow memory conversions read exactly their architectural operand
 width, including a page-boundary no-overread witness.
+
+`0035-gem-i386-avx2-memory-gather.patch` (SHA-256
+`884021d0fdfc422ce6883ce1f2251324f9c24af055e789de8c639cc1768670c0`)
+closes the remaining pinned AVX2 semantic groups: dword/qword per-element
+variable shifts, integer masked loads/stores, aligned VMOVNTDQA, and all 16
+128/256-bit gather patterns. Gather uses legacy32 VSIB address generation and
+exports architecturally restartable partial destination/mask state on faults.
+
+`0036-gem-i386-avx2-cpuid.patch` (SHA-256
+`ff69c66c0c4124b17cd4548232e05da11ee623e66782a61e3bb91f8e0046d84d`)
+advertises AVX2 only after the 138-class/302-pattern XED inventory, precise
+interpreter/JIT semantics, fault-state tests, both golden corpora, and a loaded
+four-instruction AVX2 guest program pass on macOS ARM64.

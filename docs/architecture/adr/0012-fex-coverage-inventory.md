@@ -194,11 +194,13 @@ The selected guest is i386 legacy32 (Windows WoW64):
   blends, movemasks, and immediate/shared-count shifts. Patch 0034 adds every
   signed/unsigned widening form, broadcasts, lane insert/extract, variable and
   immediate permutation, cross-lane permutation, and dword blending, with
-  exact-width page-boundary memory tests. The remaining masked-memory, gather,
-  non-temporal load, and per-element variable-shift groups stay fail-closed
-  until implemented;
-  therefore AVX2 CPUID remains masked for now, based on SharpWine's own
-  incomplete inventory rather than an oracle limitation.
+  exact-width page-boundary memory tests. Patch 0035 closes the remaining
+  masked-memory, non-temporal-load, per-element variable-shift, and all 16
+  gather patterns, including restartable partial destination/mask state on a
+  gather fault. Patch 0036 adds a four-instruction loaded guest-program witness
+  and atomically advertises AVX2 in CPUID leaf 7 and manifest profile v6. The
+  pinned AVX2 inventory is complete and enabled based on SharpWine's native
+  macOS ARM64 proof, not on an external oracle ceiling.
 
 ## Acceptance authority
 

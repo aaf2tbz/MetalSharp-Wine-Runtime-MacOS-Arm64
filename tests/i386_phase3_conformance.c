@@ -224,7 +224,8 @@ static void verify_cpuid_profile(void) {
     assert((ecx & ((1U << 12U) | (1U << 13U) | (1U << 30U))) == 0U);
     assert((edx & ((1U << 0U) | (1U << 8U) | (1U << 15U) | (1U << 23U) | (1U << 24U) | (1U << 25U) |
                    (1U << 26U))) != 0U);
-    assert(leaf7.record.final.gpr[GEM_I386_EBX] == ((1U << 3U) | (1U << 8U) | (1U << 9U)));
+    assert(leaf7.record.final.gpr[GEM_I386_EBX] ==
+           ((1U << 3U) | (1U << 5U) | (1U << 8U) | (1U << 9U)));
     assert((ext.record.final.gpr[GEM_I386_EDX] & (1U << 27U)) != 0U);
     assert((ext.record.final.gpr[GEM_I386_EDX] & ((1U << 11U) | (1U << 29U))) == 0U);
 }
@@ -803,6 +804,68 @@ static void verify_avx_guest_program(enum gem_i386_engine_mode mode) {
     gem_memory_destroy(memory);
 }
 
+static void verify_avx2_guest_program(enum gem_i386_engine_mode mode) {
+    static const uint8_t code[] = {
+        0xc5U, 0xfeU, 0x6fU, 0x0eU,        /* vmovdqu ymm1,[esi] */
+        0xc5U, 0xfeU, 0x6fU, 0x56U, 0x20U, /* vmovdqu ymm2,[esi+32] */
+        0xc5U, 0xf5U, 0xfeU, 0xc2U,        /* vpaddd ymm0,ymm1,ymm2 */
+        0xc5U, 0xfeU, 0x7fU, 0x07U         /* vmovdqu [edi],ymm0 */
+    };
+    static const uint32_t input[16] = {1U,  2U,  3U,  4U,  5U,  6U,  7U,  8U,
+                                       10U, 20U, 30U, 40U, 50U, 60U, 70U, 80U};
+    static const uint32_t expected[8] = {11U, 22U, 33U, 44U, 55U, 66U, 77U, 88U};
+    struct gem_i386_runtime_config config = {0};
+    struct gem_i386_stop_info stop = {0};
+    struct gem_i386_engine_info info = {0};
+    struct gem_i386_context context;
+    struct gem_i386_runtime *runtime;
+    enum gem_stop_reason reason;
+    struct gem_memory *memory = gem_memory_create();
+    uint32_t output[8] = {0};
+    uint32_t address = CODE;
+    assert(memory != NULL);
+    assert(gem_i386_memory_reserve(memory, &address, GEM_GUEST_PAGE_SIZE) == GEM_MEMORY_OK);
+    assert(gem_i386_memory_commit(memory, CODE, GEM_GUEST_PAGE_SIZE, GEM_PAGE_EXECUTE_READWRITE) ==
+           GEM_MEMORY_OK);
+    assert(gem_i386_memory_write(memory, CODE, code, sizeof(code)) == GEM_MEMORY_OK);
+    address = DATA;
+    assert(gem_i386_memory_reserve(memory, &address, GEM_GUEST_PAGE_SIZE) == GEM_MEMORY_OK);
+    assert(gem_i386_memory_commit(memory, DATA, GEM_GUEST_PAGE_SIZE, GEM_PAGE_READWRITE) ==
+           GEM_MEMORY_OK);
+    assert(gem_i386_memory_write(memory, DATA, input, sizeof(input)) == GEM_MEMORY_OK);
+    config.engine_mode = mode;
+    config.host_return_sentinel = CODE + (uint32_t)sizeof(code);
+    config.max_budget = 5U;
+    runtime = gem_i386_runtime_create(memory, &config);
+    assert(runtime != NULL);
+    gem_i386_context_initialize(&context, UINT32_C(0x7ffde000));
+    context.eip = CODE;
+    context.gpr[GEM_I386_ESI] = DATA;
+    context.gpr[GEM_I386_EDI] = DATA + 128U;
+    context.xcr0 = GEM_I386_XCR0_SUPPORTED;
+    reason = gem_i386_runtime_run(runtime, &context, 5U);
+    assert(gem_i386_runtime_last_stop_info(runtime, &stop));
+    if (reason != GEM_STOP_HOST_RETURN)
+        fprintf(stderr,
+                "AVX2 guest program stopped: mode=%u reason=%u eip=%08x status=%08x retired=%u\n",
+                (unsigned)mode, (unsigned)reason, context.eip, stop.engine_status,
+                stop.instructions_retired);
+    assert(reason == GEM_STOP_HOST_RETURN);
+    assert(stop.instructions_retired == 4U);
+    assert(context.eip == CODE + sizeof(code));
+    assert(gem_i386_memory_read(memory, DATA + 128U, output, sizeof(output)) == GEM_MEMORY_OK);
+    assert(memcmp(output, expected, sizeof(output)) == 0);
+    info.abi_version = 1U;
+    info.size = sizeof(info);
+    assert(gem_i386_runtime_engine_info(runtime, &info));
+    if (mode == GEM_I386_ENGINE_JIT)
+        assert(info.jit_executions == 4U && info.jit_failures == 0U);
+    else
+        assert(info.jit_executions == 0U);
+    gem_i386_runtime_destroy(runtime);
+    gem_memory_destroy(memory);
+}
+
 static void expect_masked_instruction(const uint8_t *code, size_t code_size) {
     const enum gem_i386_engine_mode modes[] = {GEM_I386_ENGINE_INTERPRETER, GEM_I386_ENGINE_JIT};
     unsigned int mode_index;
@@ -846,7 +909,6 @@ static void expect_masked_instruction(const uint8_t *code, size_t code_size) {
 }
 
 static void verify_masked_instructions(void) {
-    static const uint8_t avx2[] = {0xc4U, 0xe2U, 0x75U, 0x47U, 0xc2U};
     static const uint8_t fma[] = {0xc4U, 0xe2U, 0x71U, 0x98U, 0xc1U};
     static const uint8_t invalid_bmi2_prefix[] = {0xc4U, 0xe2U, 0x71U, 0xf5U, 0xd8U};
     static const uint8_t invalid_legacy_bmi2[] = {0x0fU, 0x38U, 0xf5U, 0xd8U};
@@ -855,7 +917,6 @@ static void verify_masked_instructions(void) {
     static const uint8_t rdseed[] = {0x0fU, 0xc7U, 0xf8U};
     static const uint8_t rdpid[] = {0xf3U, 0x0fU, 0xc7U, 0xf8U};
     static const uint8_t fsgsbase[] = {0xf3U, 0x0fU, 0xaeU, 0xc0U};
-    expect_masked_instruction(avx2, sizeof(avx2));
     expect_masked_instruction(fma, sizeof(fma));
     expect_masked_instruction(invalid_bmi2_prefix, sizeof(invalid_bmi2_prefix));
     expect_masked_instruction(invalid_legacy_bmi2, sizeof(invalid_legacy_bmi2));
@@ -1007,6 +1068,8 @@ int main(void) {
     verify_bmi2_guest_program(GEM_I386_ENGINE_JIT);
     verify_avx_guest_program(GEM_I386_ENGINE_INTERPRETER);
     verify_avx_guest_program(GEM_I386_ENGINE_JIT);
+    verify_avx2_guest_program(GEM_I386_ENGINE_INTERPRETER);
+    verify_avx2_guest_program(GEM_I386_ENGINE_JIT);
     verify_masked_instructions();
     assert(capture_reference || fgetc(reference_file) == EOF);
     assert(fclose(reference_file) == 0);

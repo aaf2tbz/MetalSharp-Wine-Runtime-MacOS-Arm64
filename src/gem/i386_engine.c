@@ -135,7 +135,8 @@ enum gem_stop_reason gem_i386_runtime_run(struct gem_i386_runtime *runtime,
         if (quantum_retired != 0U || reason == GEM_STOP_NONE || reason == GEM_STOP_HOST_RETURN ||
             reason == GEM_STOP_SYSCALL || reason == GEM_STOP_ASYNC_REQUEST ||
             (reason == GEM_STOP_MEMORY_FAULT &&
-             runtime->last_stop.engine_status == GEM_I386_ENGINE_STATUS_RESTARTABLE_REP)) {
+             (runtime->last_stop.engine_status == GEM_I386_ENGINE_STATUS_RESTARTABLE_REP ||
+              runtime->last_stop.engine_status == GEM_I386_ENGINE_STATUS_RESTARTABLE_GATHER))) {
             if (!gem_i386_context_is_valid(&output))
                 reason = GEM_STOP_INVARIANT_VIOLATION;
             else

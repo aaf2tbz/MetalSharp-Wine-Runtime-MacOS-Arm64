@@ -341,9 +341,13 @@ enum gem_stop_reason gem_i386_blink_step(struct gem_i386_runtime *runtime,
         return result.retired == 1U ? GEM_STOP_NONE : GEM_STOP_INVARIANT_VIOLATION;
     }
     if (result.outcome == BLINK_GEM_MEMORY_FAULT) {
-        if (result.engine_status == BLINK_GEM_ENGINE_STATUS_RESTARTABLE_REP) {
+        if (result.engine_status == BLINK_GEM_ENGINE_STATUS_RESTARTABLE_REP ||
+            result.engine_status == BLINK_GEM_ENGINE_STATUS_RESTARTABLE_GATHER) {
             export_state(&blink_out, in, out);
-            runtime->last_stop.engine_status = GEM_I386_ENGINE_STATUS_RESTARTABLE_REP;
+            runtime->last_stop.engine_status =
+                result.engine_status == BLINK_GEM_ENGINE_STATUS_RESTARTABLE_REP
+                    ? GEM_I386_ENGINE_STATUS_RESTARTABLE_REP
+                    : GEM_I386_ENGINE_STATUS_RESTARTABLE_GATHER;
         }
         return GEM_STOP_MEMORY_FAULT;
     }
@@ -443,7 +447,8 @@ enum gem_stop_reason gem_i386_blink_run(struct gem_i386_runtime *runtime,
     runtime->last_stop.engine_status = result.engine_status;
     if (result.outcome == BLINK_GEM_RETIRED || result.outcome == BLINK_GEM_STOP_PC ||
         result.outcome == BLINK_GEM_ASYNC_STOP || result.outcome == BLINK_GEM_QUANTUM_BOUNDARY ||
-        result.retired != 0U || result.engine_status == BLINK_GEM_ENGINE_STATUS_RESTARTABLE_REP) {
+        result.retired != 0U || result.engine_status == BLINK_GEM_ENGINE_STATUS_RESTARTABLE_REP ||
+        result.engine_status == BLINK_GEM_ENGINE_STATUS_RESTARTABLE_GATHER) {
         export_state(&blink_out, in, out);
         ++runtime->performance.state_exports;
     }
@@ -468,6 +473,8 @@ enum gem_stop_reason gem_i386_blink_run(struct gem_i386_runtime *runtime,
     if (result.outcome == BLINK_GEM_MEMORY_FAULT) {
         if (result.engine_status == BLINK_GEM_ENGINE_STATUS_RESTARTABLE_REP)
             runtime->last_stop.engine_status = GEM_I386_ENGINE_STATUS_RESTARTABLE_REP;
+        else if (result.engine_status == BLINK_GEM_ENGINE_STATUS_RESTARTABLE_GATHER)
+            runtime->last_stop.engine_status = GEM_I386_ENGINE_STATUS_RESTARTABLE_GATHER;
         return GEM_STOP_MEMORY_FAULT;
     }
     if (result.outcome == BLINK_GEM_EXCEPTION) {
