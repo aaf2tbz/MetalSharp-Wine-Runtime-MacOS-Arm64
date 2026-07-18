@@ -264,7 +264,7 @@ def audit_decode_attempt(provenance, machine_text, embedding_text, embedding_hea
     )
     need("Mopcode(m->xedd->op.rde)" in embedding_text,
          "decode attempt identity not sourced from Blink mopcode")
-    need("DescribeMopcode((int)g->last_decode.mopcode)" in embedding_text,
+    need("DescribeMopcode((int)out->mopcode)" in embedding_text,
          "decode attempt name not sourced from Blink DescribeMopcode")
     need('#include "blink/debug.h"' in embedding_text,
          "decode attempt name source header missing")
@@ -418,13 +418,15 @@ def main():
     parser.add_argument("--resident-state-patch", type=Path, required=True)
     parser.add_argument("--block-linking-patch", type=Path, required=True)
     parser.add_argument("--aligned-simd-store-patch", type=Path, required=True)
+    parser.add_argument("--precise-host-dirty-patch", type=Path, required=True)
+    parser.add_argument("--tiered-resident-fastpath-patch", type=Path, required=True)
     parser.add_argument("--capability-manifest", type=Path, required=True)
     parser.add_argument("--phase3-corpus", type=Path, required=True)
     parser.add_argument("--provenance", type=Path, required=True)
     args = parser.parse_args()
 
     provenance = json.loads(args.provenance.read_text())
-    need(provenance["schemaVersion"] == 44, "provenance schema")
+    need(provenance["schemaVersion"] == 46, "provenance schema")
     need(provenance["revision"] == PINNED_REVISION, "revision")
     need(digest(args.patch) == provenance["patchSha256"], "patch hash")
     need(digest(args.jit_patch) == provenance["jitPatchSha256"], "JIT patch hash")
@@ -565,6 +567,16 @@ def main():
         == provenance["alignedSimdStorePatchSha256"],
         "aligned SIMD store patch hash",
     )
+    need(
+        digest(args.precise_host_dirty_patch)
+        == provenance["preciseHostDirtyPatchSha256"],
+        "precise host-dirty patch hash",
+    )
+    need(
+        digest(args.tiered_resident_fastpath_patch)
+        == provenance["tieredResidentFastpathPatchSha256"],
+        "tiered resident fast-path patch hash",
+    )
     for relative, expected_hash in provenance["postPatch"].items():
         need(digest(args.source / relative) == expected_hash, f"hash {relative}")
 
@@ -627,6 +639,7 @@ def main():
         "block_linked_successor(",
         "return_prediction_hits",
         "invalidate_blocks(g, address, size)",
+        "blink_gem_machine_invalidate_memory(",
     ):
         need(required in embedding, f"missing bounded JIT embedding invariant {required}")
     need("m->gemembed || opclass == kOpBranching" in machine, "JIT path is not one instruction")

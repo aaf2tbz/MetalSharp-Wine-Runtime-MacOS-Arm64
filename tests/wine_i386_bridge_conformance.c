@@ -48,6 +48,11 @@ static enum gem_wine_status boundary(void *opaque,
     assert(request->event == state->expected_event);
     if (state->expected_engine_status != 0U)
         assert(request->stop.engine_status == state->expected_engine_status);
+    if (state->expected_access != 0U && request->stop.access != state->expected_access)
+        fprintf(stderr, "i386 boundary access mismatch: expected=%u actual=%u event=%u eip=%08x "
+                        "fault=%08llx memory=%u\n",
+                state->expected_access, request->stop.access, request->event, request->context.eip,
+                (unsigned long long)request->stop.fault_address, request->stop.memory_error);
     if (state->expected_access != 0U)
         assert(request->stop.access == state->expected_access);
     ++state->calls;
@@ -164,7 +169,10 @@ int main(void) {
     i386_config.unix_call_boundary = UINT32_C(0x7ffe1010);
     i386_config.host_return_sentinel = HOST_RETURN;
 #if defined(GEM_WINE_I386_TEST_INTERPRETER)
-    i386_config.flags = GEM_WINE_I386_FLAG_INTERPRETER_ORACLE;
+    i386_config.flags = GEM_WINE_I386_FLAG_INTERPRETER_ORACLE |
+                        GEM_WINE_I386_FLAG_PRECISE_HOST_DIRTY;
+#else
+    i386_config.flags = GEM_WINE_I386_FLAG_PRECISE_HOST_DIRTY;
 #endif
     make_pe32(image, UINT16_C(0x8664));
     assert(gem_wine_process_prepare_i386(process, &i386_config) == GEM_WINE_INVALID_ARGUMENT);
@@ -388,6 +396,8 @@ int main(void) {
          * through the guest memory API.  The next checked run must refresh
          * that data while retaining the separately invalidated code page. */
         *host = UINT32_C(41);
+        assert(gem_wine_process_notify_memory_dirty(process, external_data, sizeof(*host)) ==
+               GEM_WINE_OK);
         memcpy(image + 0x1000U, external_load_code, sizeof(external_load_code));
         assert(gem_wine_process_invalidate_code(process, CODE_ADDRESS,
                                                 sizeof(external_load_code)) == GEM_WINE_OK);

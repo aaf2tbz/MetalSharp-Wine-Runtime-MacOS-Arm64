@@ -352,3 +352,16 @@ rollback checks are restricted to that exact architectural write range and the
 guarded stack range instead of scanning every cached page. This fixes UCRT and
 Notepad++ partial-buffer copies and removes the measured full-cache compile scan
 without a CPUID mask or a global interpreter switch.
+
+`0048-gem-i386-precise-host-dirty.patch` (SHA-256
+`0121ff0947c961097dbec42e506e307e5e88ccda61ec5f418e9e389a7ea5c02c`)
+adds bounded shadow-page invalidation for Wine's explicit host-dirty ranges.
+Dropping writable non-executable data no longer flushes Blink's instruction
+cache; executable pages retain the existing decode/JIT invalidation rules.
+
+`0049-gem-i386-tiered-resident-fastpath.patch` (SHA-256
+`c63cdb93ec1154c4af192f01de4817551f14fad6a918d466ac6a8bc3e1ff6a87`)
+folds the W11 resident-state, page-lookup, tiered-JIT, precise dirty-page, and
+deferred mnemonic work into the reproducible patch stack. Safe hot PCs are
+promoted through Blink's checked compiler before the resident fast path uses
+their native hook; interpreter mode remains an explicit fallback.

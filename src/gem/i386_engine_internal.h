@@ -30,6 +30,7 @@ struct gem_i386_runtime {
     uint32_t consecutive_conflicts;
     bool running;
     bool backend_failed;
+    bool precise_host_dirty;
     bool trace_drain;
     uint64_t trace_flush_entries;
     atomic_bool async_stop_requested;
@@ -51,5 +52,7 @@ bool gem_i386_blink_block_info(const struct gem_i386_runtime *runtime,
                                struct gem_i386_block_info *out);
 bool gem_i386_blink_invalidate_code(struct gem_i386_runtime *runtime, uint32_t address,
                                     uint64_t size);
+bool gem_i386_blink_invalidate_memory(struct gem_i386_runtime *runtime, uint32_t address,
+                                      uint64_t size);
 
 #endif

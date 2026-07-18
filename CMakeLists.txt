@@ -206,6 +206,8 @@ if(MSWR_ENABLE_X64_ENGINE OR MSWR_ENABLE_I386_ENGINE)
         --resident-state-patch "${CMAKE_CURRENT_SOURCE_DIR}/third_party/patches/blink/0045-gem-i386-resident-quantum-state.patch"
         --block-linking-patch "${CMAKE_CURRENT_SOURCE_DIR}/third_party/patches/blink/0046-gem-i386-block-linking.patch"
         --aligned-simd-store-patch "${CMAKE_CURRENT_SOURCE_DIR}/third_party/patches/blink/0047-gem-i386-aligned-simd-stores.patch"
+        --precise-host-dirty-patch "${CMAKE_CURRENT_SOURCE_DIR}/third_party/patches/blink/0048-gem-i386-precise-host-dirty.patch"
+        --tiered-resident-fastpath-patch "${CMAKE_CURRENT_SOURCE_DIR}/third_party/patches/blink/0049-gem-i386-tiered-resident-fastpath.patch"
         --capability-manifest "${CMAKE_CURRENT_SOURCE_DIR}/docs/architecture/adr/i386-phase3-capabilities.json"
         --phase3-corpus "${CMAKE_CURRENT_SOURCE_DIR}/tests/i386_phase3_conformance.c"
         --provenance "${CMAKE_CURRENT_SOURCE_DIR}/docs/architecture/adr/0008-blink-embedding.provenance.json"

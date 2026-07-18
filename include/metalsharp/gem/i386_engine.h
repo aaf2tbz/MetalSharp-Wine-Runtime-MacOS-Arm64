@@ -190,6 +190,9 @@ bool gem_i386_runtime_block_info(const struct gem_i386_runtime *runtime,
                                  struct gem_i386_block_info *out);
 void gem_i386_runtime_invalidate_code(struct gem_i386_runtime *runtime, uint32_t address,
                                       uint64_t size);
+void gem_i386_runtime_invalidate_memory(struct gem_i386_runtime *runtime, uint32_t address,
+                                        uint64_t size);
+bool gem_i386_runtime_set_precise_host_dirty(struct gem_i386_runtime *runtime, bool enabled);
 void gem_i386_runtime_request_async_stop(struct gem_i386_runtime *runtime);
 const char *gem_i386_runtime_engine_name(const struct gem_i386_runtime *runtime);
 const char *gem_i386_runtime_engine_version(const struct gem_i386_runtime *runtime);

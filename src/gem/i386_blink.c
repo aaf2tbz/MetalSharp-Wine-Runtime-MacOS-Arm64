@@ -12,6 +12,7 @@
 #define GEM_I386_TRACE_ID_SLOTS UINT32_C(0x1400)
 #define GEM_I386_TRACE_PATH_BYTES 4096
 #define GEM_I386_TRACE_FLUSH_ENTRIES_DEFAULT UINT64_C(16384)
+#define GEM_I386_MAX_COMMIT_PAGES 64U
 
 static atomic_uint_fast64_t trace_counts[GEM_I386_TRACE_ID_SLOTS];
 static atomic_uint_fast64_t trace_out_of_range;
@@ -162,19 +163,17 @@ static uint32_t validate(void *opaque, uint64_t address, size_t size,
 static uint32_t commit(void *opaque, const struct blink_gem_write *writes, size_t count,
                        uint64_t *fault_address) {
     struct gem_i386_runtime *runtime = (struct gem_i386_runtime *)opaque;
-    struct gem_memory_page_write *pages;
+    struct gem_memory_page_write pages[GEM_I386_MAX_COMMIT_PAGES];
     enum gem_memory_error error;
     size_t bytes_committed = 0U;
     size_t i;
     if (count == 0U)
         return GEM_MEMORY_OK;
-    pages = (struct gem_memory_page_write *)calloc(count, sizeof(*pages));
-    if (pages == NULL)
-        return GEM_MEMORY_NO_MEMORY;
+    if (count > GEM_I386_MAX_COMMIT_PAGES)
+        return GEM_MEMORY_INVALID_ARGUMENT;
     for (i = 0; i < count; ++i) {
         if (writes[i].size != GEM_GUEST_PAGE_SIZE ||
             !i386_range(writes[i].address, writes[i].size)) {
-            free(pages);
             return GEM_MEMORY_OVERFLOW;
         }
         pages[i].address = writes[i].address;
@@ -184,7 +183,6 @@ static uint32_t commit(void *opaque, const struct blink_gem_write *writes, size_
                                                 &bytes_committed);
     if (error == GEM_MEMORY_OK)
         runtime->performance.bytes_committed += bytes_committed;
-    free(pages);
     return (uint32_t)error;
 }
 
@@ -326,7 +324,8 @@ void gem_i386_blink_destroy(struct gem_i386_runtime *runtime) {
 }
 
 void gem_i386_blink_sync(struct gem_i386_runtime *runtime) {
-    blink_gem_machine_sync(runtime->backend);
+    if (!runtime->precise_host_dirty)
+        blink_gem_machine_sync(runtime->backend);
 }
 
 enum gem_stop_reason gem_i386_blink_step(struct gem_i386_runtime *runtime,
@@ -608,6 +607,12 @@ bool gem_i386_blink_invalidate_code(struct gem_i386_runtime *runtime, uint32_t a
            blink_gem_machine_invalidate_code(runtime->backend, address, size);
 }
 
+bool gem_i386_blink_invalidate_memory(struct gem_i386_runtime *runtime, uint32_t address,
+                                      uint64_t size) {
+    return runtime != NULL && i386_range(address, size) &&
+           blink_gem_machine_invalidate_memory(runtime->backend, address, size);
+}
+
 void gem_i386_runtime_handler_trace_reset(struct gem_i386_runtime *runtime) {
     if (runtime != NULL)
         blink_gem_machine_trace_reset(runtime->backend);
@@ -682,6 +687,7 @@ const struct gem_i386_engine_ops gem_i386_blink_jit_ops = {
     gem_i386_blink_engine_info,
     gem_i386_blink_block_info,
     gem_i386_blink_invalidate_code,
+    gem_i386_blink_invalidate_memory,
 };
 
 const struct gem_i386_engine_ops gem_i386_blink_interpreter_ops = {
@@ -701,4 +707,5 @@ const struct gem_i386_engine_ops gem_i386_blink_interpreter_ops = {
     gem_i386_blink_engine_info,
     gem_i386_blink_block_info,
     gem_i386_blink_invalidate_code,
+    gem_i386_blink_invalidate_memory,
 };

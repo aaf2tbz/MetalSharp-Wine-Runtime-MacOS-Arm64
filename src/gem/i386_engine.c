@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "i386_engine_internal.h"
 
-#include <stdio.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 #if defined(_WIN32)
 #include <windows.h>
@@ -49,7 +49,7 @@ gem_i386_runtime_create_with_ops(struct gem_memory *memory,
          ops->engine_mode != GEM_I386_ENGINE_INTERPRETER) ||
         ops->create == NULL || ops->destroy == NULL || ops->sync == NULL || ops->step == NULL ||
         ops->run == NULL || ops->engine_info == NULL || ops->block_info == NULL ||
-        ops->invalidate_code == NULL)
+        ops->invalidate_code == NULL || ops->invalidate_memory == NULL)
         return NULL;
     runtime = (struct gem_i386_runtime *)calloc(1U, sizeof(*runtime));
     if (runtime == NULL)
@@ -332,6 +332,21 @@ void gem_i386_runtime_invalidate_code(struct gem_i386_runtime *runtime, uint32_t
         return;
     }
     ++runtime->code_invalidations;
+}
+
+void gem_i386_runtime_invalidate_memory(struct gem_i386_runtime *runtime, uint32_t address,
+                                        uint64_t size) {
+    if (runtime == NULL)
+        return;
+    if (runtime->running || !runtime->ops->invalidate_memory(runtime, address, size))
+        runtime->backend_failed = true;
+}
+
+bool gem_i386_runtime_set_precise_host_dirty(struct gem_i386_runtime *runtime, bool enabled) {
+    if (runtime == NULL || runtime->running)
+        return false;
+    runtime->precise_host_dirty = enabled;
+    return true;
 }
 
 void gem_i386_runtime_request_async_stop(struct gem_i386_runtime *runtime) {
