@@ -178,6 +178,12 @@ Bridge consequence (explicit, not silent):
 the old version accepted for v1/v2-sized contexts during the same transition
 window the engine accepts them.
 
+Implemented by Wine patch 0020 and `GEM_WINE_I386_BOUNDARY_ABI_VERSION_V2`:
+new callbacks receive the 648-byte request and return the 608-byte response;
+the bridge accepts an explicitly versioned 464-byte v1 response only when its
+embedded context declares layout v1/v2 and size 448. The x64/ARM64EC boundary
+stays at `GEM_WINE_BOUNDARY_ABI_VERSION` 1.
+
 ### b. XCR0 policy
 
 - Supported mask: `XCR0 = x87 | SSE | AVX = 0x7`. No other bit is ever set;
@@ -186,7 +192,8 @@ window the engine accepts them.
   (eax = 0x7, edx = 0 while only the base mask exists).
 - `XSETBV` (`0x0f 0x01 0xd1`) in user mode raises #GP(0) on real hardware;
   GEM maps it to the existing Windows-exception boundary with a documented
-  engine_status (the same class as other privileged-op rejections), never
+  `GEM_I386_EXCEPTION_GENERAL_PROTECTION` engine_status, and Wine patch 0020
+  translates that identity to `EXCEPTION_PRIV_INSTRUCTION`, never
   silently ignoring it and never allowing a narrower mask (state would be
   lost) or a wider one (unsupported state).
 - CPUID rules follow from the mask: leaf 1 ECX keeps OSXSAVE (bit 27), XSAVE

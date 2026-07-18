@@ -129,6 +129,10 @@
         {
           "path": "third_party/patches/wine/0019-xtajit-preserve-i386-v2-legacy-state.patch",
           "sha256": "f4cbd77e6f913988bf04b5ded829c5ad87b8289348d756c14f01753a6c7a4271"
+        },
+        {
+          "path": "third_party/patches/wine/0020-xtajit-map-i386-avx-xstate.patch",
+          "sha256": "3cdd44940fe0116ba21730b3b73a5597d84462353b4b42d794177b3eab32ea8a"
         }
       ]
     },

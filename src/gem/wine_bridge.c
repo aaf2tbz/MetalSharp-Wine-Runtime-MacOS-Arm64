@@ -1350,21 +1350,25 @@ enum gem_wine_status gem_wine_i386_thread_run(struct gem_wine_thread *thread,
             struct gem_wine_i386_boundary_response response;
             enum gem_wine_status callback_status;
             memset(&request, 0, sizeof(request));
-            request.version = GEM_WINE_BOUNDARY_ABI_VERSION;
+            request.version = GEM_WINE_I386_BOUNDARY_ABI_VERSION;
             request.struct_size = (uint32_t)sizeof(request);
             request.event = run_result.last_event;
             request.context = context;
             request.stop = stop;
             memset(&response, 0, sizeof(response));
-            response.version = GEM_WINE_BOUNDARY_ABI_VERSION;
+            response.version = GEM_WINE_I386_BOUNDARY_ABI_VERSION;
             response.struct_size = (uint32_t)sizeof(response);
             response.context = context;
             ++run_result.boundary_callbacks;
             callback_status =
                 thread->i386_config.boundary(thread->i386_config.opaque, &request, &response);
             if (callback_status != GEM_WINE_OK ||
-                response.version != GEM_WINE_BOUNDARY_ABI_VERSION ||
-                response.struct_size != sizeof(response)) {
+                !((response.version == GEM_WINE_I386_BOUNDARY_ABI_VERSION &&
+                   response.struct_size == sizeof(response)) ||
+                  (response.version == GEM_WINE_I386_BOUNDARY_ABI_VERSION_V1 &&
+                   response.struct_size == GEM_WINE_I386_BOUNDARY_RESPONSE_SIZE_V1 &&
+                   response.context.layout_version <= GEM_I386_CONTEXT_LAYOUT_VERSION_V2 &&
+                   response.context.context_size == GEM_I386_CONTEXT_SIZE_V2))) {
                 run_result.outcome = GEM_WINE_RUN_FAILED;
                 status = GEM_WINE_CALLBACK_ERROR;
                 break;

@@ -139,6 +139,13 @@
       "sha256": "f4cbd77e6f913988bf04b5ded829c5ad87b8289348d756c14f01753a6c7a4271",
       "authoringCommit": "0000000000000000000000000000000000000019",
       "purpose": "Preserve complete fixed-size i386 v2 x87, XMM, flags, and segment metadata across WoW64 callback, syscall, exception, suspend, resume, and context-set transitions."
+    },
+    {
+      "order": 20,
+      "path": "third_party/patches/wine/0020-xtajit-map-i386-avx-xstate.patch",
+      "sha256": "3cdd44940fe0116ba21730b3b73a5597d84462353b4b42d794177b3eab32ea8a",
+      "authoringCommit": "0000000000000000000000000000000000000020",
+      "purpose": "Map standard-format WoW64 CONTEXT_EX AVX state to the GEM i386 ABI-v3 YMM-upper and XCR0 fields while rejecting compacted or undersized layouts, and translate normalized general-protection stops to Windows privileged-instruction exceptions."
     }
   ],
   "researchEvidence": {
