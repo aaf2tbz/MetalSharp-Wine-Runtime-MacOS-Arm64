@@ -243,6 +243,19 @@ The selected guest is i386 legacy32 (Windows WoW64):
   all defined flags, and a loaded program that obtains and stores both values.
   Patch 0044 atomically advertises leaf 1 ECX RDRAND and leaf 7 EBX RDSEED.
 
+## Native DBT adaptations
+
+- Patch 0045 makes the Phase 5.5 resident integer-state design explicit for
+  deferred flag and SIMD state. Blink's internal lazy-parity byte and YMM/XCR0
+  registers remain resident between instructions in a checked GEM quantum;
+  imports still occur on quantum entry and transactional retry, and complete
+  architectural state is exported at every budget, stop, fault, or host
+  boundary. `ExportFlags` now strips the private lazy-parity byte after
+  materializing PF, preventing internal representation bits from escaping in
+  EFLAGS. The three-way 1..256 budget gate covers flag consumers, touched
+  memory, conditional/direct branches, and YMM arithmetic across one-step
+  interpreter, bounded interpreter, and production JIT execution.
+
 ## Acceptance authority
 
 FEX contributes evidence and checklists only. Semantic acceptance remains, in

@@ -316,3 +316,10 @@ fail-closed.
 `399d53904eb3b6320683525f44c0daf760ae81f476467a1fee4f5b683a567492`)
 advertises RDRAND and RDSEED after 16/32-bit width, repeated cache-path,
 interpreter/JIT, flag, and loaded four-instruction guest-program gates pass.
+
+`0045-gem-i386-resident-quantum-state.patch` (SHA-256
+`e663cf701e713a181bd378d6ced9cd1cc57ad3435c33d45082476225b7f722e6`)
+keeps Blink's lazy parity representation and YMM/XCR0 state resident between
+instructions in a checked GEM quantum. State is imported on entry and retry,
+then fully exported at every observable boundary. The patch also prevents the
+internal lazy-parity byte from leaking through architectural EFLAGS export.

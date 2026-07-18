@@ -81,13 +81,14 @@ static struct fixture fixture_create(void) {
 
 static struct equality_lane equality_lane_create(enum gem_i386_engine_mode mode) {
     static const uint8_t program[] = {
-        0x83U, 0xc0U, 0x03U, /* add eax,3 */
-        0xffU, 0x07U,        /* inc dword ptr [edi] */
-        0x31U, 0xd2U,        /* xor edx,edx */
-        0x75U, 0x02U,        /* jne next */
-        0x90U,               /* skipped nop */
-        0x90U,               /* next: nop */
-        0xebU, 0xf3U         /* jmp program */
+        0x83U, 0xc0U, 0x03U,        /* add eax,3 */
+        0xffU, 0x07U,               /* inc dword ptr [edi] */
+        0x31U, 0xd2U,               /* xor edx,edx */
+        0xc5U, 0xfdU, 0xfeU, 0xc1U, /* vpaddd ymm0,ymm0,ymm1 */
+        0x75U, 0x02U,               /* jne next */
+        0x90U,                      /* skipped nop */
+        0x90U,                      /* next: nop */
+        0xebU, 0xefU                /* jmp program */
     };
     struct equality_lane lane;
     struct gem_i386_runtime_config config;
@@ -130,6 +131,15 @@ static struct gem_i386_context equality_initial_context(const struct equality_la
     context.gpr[GEM_I386_EDI] = lane->data;
     context.gpr[GEM_I386_ESP] = lane->stack + (uint32_t)GEM_GUEST_PAGE_SIZE - 16U;
     context.eflags |= UINT32_C(0x8d5);
+    context.xmm[0].lo = UINT64_C(0x0000000200000001);
+    context.xmm[0].hi = UINT64_C(0x0000000400000003);
+    context.xmm[1].lo = UINT64_C(0x0000001100000010);
+    context.xmm[1].hi = UINT64_C(0x0000001300000012);
+    context.ymm_upper[0].lo = UINT64_C(0x0000000600000005);
+    context.ymm_upper[0].hi = UINT64_C(0x0000000800000007);
+    context.ymm_upper[1].lo = UINT64_C(0x0000001500000014);
+    context.ymm_upper[1].hi = UINT64_C(0x0000001700000016);
+    context.xcr0 = UINT64_C(7);
     return context;
 }
 
@@ -209,6 +219,7 @@ static void verify_three_way_boundaries(void) {
                     jit.eip, jit.gpr[GEM_I386_EAX], jit.eflags, jit_stop.instructions_retired);
             assert(0);
         }
+        assert((stepped.eflags & UINT32_C(0xff000000)) == 0U);
     }
     bounded_info.abi_version = 1U;
     bounded_info.size = sizeof(bounded_info);
