@@ -38,7 +38,7 @@ class Phase4ToolTests(unittest.TestCase):
         magic, schema, count, shard, ordinal, seed = struct.unpack("<8sIIIIQ", data[:32])
         self.assertEqual(magic, b"SWP5GLD1")
         self.assertEqual((schema, count, shard, ordinal, seed),
-                         (1, 20313, 4, 3928, 0x534841525057494E))
+                         (1, 65536, 15, 4095, 0x534841525057494E))
         self.assertEqual(len(data), 32 + count * 8)
         self.assertEqual(hashlib.sha256(data).hexdigest(),
                          evidence["phase5CiCorpus"]["goldenSha256"])
