@@ -208,7 +208,7 @@ def audit_trace(provenance, machine_text, embedding_text, embedding_header):
     # Identity must originate at Blink's own selected decode/dispatch handler.
     need(
         re.search(
-            r"GemHandlerId\(GetOp\(Mopcode\(m->xedd->op.rde\)\),\s*"
+            r"GemHandlerId\(GetOpForRde\(m, m->xedd->op.rde\),\s*"
             r"m->xedd->op.rde,\s*"
             r"g->guest_mode == BLINK_GEM_GUEST_LEGACY_32\)",
             embedding_text,
@@ -270,7 +270,7 @@ def audit_decode_attempt(provenance, machine_text, embedding_text, embedding_hea
          "decode attempt name source header missing")
     need(
         re.search(
-            r"GemHandlerId\(GetOp\(Mopcode\(m->xedd->op.rde\)\),\s*"
+            r"GemHandlerId\(GetOpForRde\(m, m->xedd->op.rde\),\s*"
             r"m->xedd->op.rde,\s*"
             r"g->guest_mode == BLINK_GEM_GUEST_LEGACY_32\)", embedding_text,
         ) and "g->last_decode.handler_id" in embedding_text,
@@ -374,13 +374,14 @@ def main():
     parser.add_argument("--bmi1-patch", type=Path, required=True)
     parser.add_argument("--bmi2-patch", type=Path, required=True)
     parser.add_argument("--rdtscp-patch", type=Path, required=True)
+    parser.add_argument("--avx-foundation-patch", type=Path, required=True)
     parser.add_argument("--capability-manifest", type=Path, required=True)
     parser.add_argument("--phase3-corpus", type=Path, required=True)
     parser.add_argument("--provenance", type=Path, required=True)
     args = parser.parse_args()
 
     provenance = json.loads(args.provenance.read_text())
-    need(provenance["schemaVersion"] == 18, "provenance schema")
+    need(provenance["schemaVersion"] == 19, "provenance schema")
     need(provenance["revision"] == PINNED_REVISION, "revision")
     need(digest(args.patch) == provenance["patchSha256"], "patch hash")
     need(digest(args.jit_patch) == provenance["jitPatchSha256"], "JIT patch hash")
@@ -428,6 +429,10 @@ def main():
     need(digest(args.bmi1_patch) == provenance["bmi1PatchSha256"], "BMI1 patch hash")
     need(digest(args.bmi2_patch) == provenance["bmi2PatchSha256"], "BMI2 patch hash")
     need(digest(args.rdtscp_patch) == provenance["rdtscpPatchSha256"], "RDTSCP patch hash")
+    need(
+        digest(args.avx_foundation_patch) == provenance["avxFoundationPatchSha256"],
+        "AVX foundation patch hash",
+    )
     for relative, expected_hash in provenance["postPatch"].items():
         need(digest(args.source / relative) == expected_hash, f"hash {relative}")
 
@@ -451,7 +456,7 @@ def main():
         "NewSystem(",
         "NewMachine(",
         "LoadInstruction(",
-        "GetOp(",
+        "GetOpForRde(",
         "GemCompileInstruction(",
         "ExecuteInstruction(",
         "ReserveVirtual(",

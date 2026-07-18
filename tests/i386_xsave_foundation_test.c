@@ -19,6 +19,9 @@ static const uint8_t xsave_esi[] = {0x0fU, 0xaeU, 0x26U};
 static const uint8_t xrstor_esi[] = {0x0fU, 0xaeU, 0x2eU};
 static const uint8_t xsaveopt_esi[] = {0x0fU, 0xaeU, 0x36U};
 static const uint8_t vzeroupper[] = {0xc5U, 0xf8U, 0x77U};
+static const uint8_t vzeroall[] = {0xc5U, 0xfcU, 0x77U};
+static const uint8_t vaddps[] = {0xc5U, 0xf0U, 0x58U, 0xc2U};
+static const uint8_t vaddss[] = {0xc5U, 0xf2U, 0x58U, 0xc2U};
 
 static void put32(uint8_t *p, uint32_t value) {
     p[0] = (uint8_t)value;
@@ -179,20 +182,54 @@ static void exercise_cross_page_retry(void) {
     gem_memory_destroy(memory);
 }
 
-static void exercise_vex_decode_gate(void) {
-    struct gem_memory *memory = make_memory(vzeroupper, sizeof(vzeroupper), GEM_GUEST_PAGE_SIZE);
-    struct gem_i386_runtime *runtime =
-        make_runtime(memory, GEM_I386_ENGINE_INTERPRETER, sizeof(vzeroupper));
+static void exercise_vzero(enum gem_i386_engine_mode mode, const uint8_t *code, size_t code_size,
+                           int clear_all) {
+    struct gem_memory *memory = make_memory(code, code_size, GEM_GUEST_PAGE_SIZE);
+    struct gem_i386_runtime *runtime = make_runtime(memory, mode, code_size);
     struct gem_i386_context context;
-    struct blink_gem_decode_attempt attempt;
+    uint32_t i;
     assert(runtime != NULL);
     initialize(&context, DATA, 0U);
-    assert(gem_i386_runtime_run(runtime, &context, 1U) == GEM_STOP_UNSUPPORTED_INSTRUCTION);
-    memset(&attempt, 0, sizeof(attempt));
-    attempt.abi_version = BLINK_GEM_DECODE_ATTEMPT_ABI_VERSION;
-    attempt.size = sizeof(attempt);
-    assert(blink_gem_machine_decode_attempt_info(runtime->backend, &attempt));
-    assert(attempt.valid && attempt.mopcode == UINT32_C(0x177));
+    for (i = 0U; i < 8U; ++i) {
+        context.xmm[i].lo = UINT64_C(0x1010101000000000) + i;
+        context.xmm[i].hi = UINT64_C(0x2020202000000000) + i;
+        context.ymm_upper[i].lo = UINT64_C(0xa0a0a0a000000000) + i;
+        context.ymm_upper[i].hi = UINT64_C(0xb0b0b0b000000000) + i;
+    }
+    assert(gem_i386_runtime_run(runtime, &context, 1U) == GEM_STOP_HOST_RETURN);
+    for (i = 0U; i < 8U; ++i) {
+        assert(context.ymm_upper[i].lo == 0U && context.ymm_upper[i].hi == 0U);
+        if (clear_all)
+            assert(context.xmm[i].lo == 0U && context.xmm[i].hi == 0U);
+        else {
+            assert(context.xmm[i].lo == UINT64_C(0x1010101000000000) + i);
+            assert(context.xmm[i].hi == UINT64_C(0x2020202000000000) + i);
+        }
+    }
+    gem_i386_runtime_destroy(runtime);
+    gem_memory_destroy(memory);
+}
+
+static void exercise_vadd(enum gem_i386_engine_mode mode, const uint8_t *code, size_t code_size,
+                          int scalar) {
+    const float lhs[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+    const float rhs[4] = {10.0f, 20.0f, 30.0f, 40.0f};
+    const float expected_packed[4] = {11.0f, 22.0f, 33.0f, 44.0f};
+    const float expected_scalar[4] = {11.0f, 2.0f, 3.0f, 4.0f};
+    struct gem_memory *memory = make_memory(code, code_size, GEM_GUEST_PAGE_SIZE);
+    struct gem_i386_runtime *runtime = make_runtime(memory, mode, code_size);
+    struct gem_i386_context context;
+    float actual[4];
+    assert(runtime != NULL);
+    initialize(&context, DATA, 0U);
+    memcpy(&context.xmm[1], lhs, sizeof(lhs));
+    memcpy(&context.xmm[2], rhs, sizeof(rhs));
+    context.ymm_upper[0].lo = UINT64_MAX;
+    context.ymm_upper[0].hi = UINT64_MAX;
+    assert(gem_i386_runtime_run(runtime, &context, 1U) == GEM_STOP_HOST_RETURN);
+    memcpy(actual, &context.xmm[0], sizeof(actual));
+    assert(memcmp(actual, scalar ? expected_scalar : expected_packed, sizeof(actual)) == 0);
+    assert(context.ymm_upper[0].lo == 0U && context.ymm_upper[0].hi == 0U);
     gem_i386_runtime_destroy(runtime);
     gem_memory_destroy(memory);
 }
@@ -218,7 +255,14 @@ int main(void) {
     exercise_xrstor(GEM_I386_ENGINE_INTERPRETER);
     exercise_xrstor(GEM_I386_ENGINE_JIT);
     exercise_cross_page_retry();
-    exercise_vex_decode_gate();
+    exercise_vzero(GEM_I386_ENGINE_INTERPRETER, vzeroupper, sizeof(vzeroupper), 0);
+    exercise_vzero(GEM_I386_ENGINE_JIT, vzeroupper, sizeof(vzeroupper), 0);
+    exercise_vzero(GEM_I386_ENGINE_INTERPRETER, vzeroall, sizeof(vzeroall), 1);
+    exercise_vzero(GEM_I386_ENGINE_JIT, vzeroall, sizeof(vzeroall), 1);
+    exercise_vadd(GEM_I386_ENGINE_INTERPRETER, vaddps, sizeof(vaddps), 0);
+    exercise_vadd(GEM_I386_ENGINE_JIT, vaddps, sizeof(vaddps), 0);
+    exercise_vadd(GEM_I386_ENGINE_INTERPRETER, vaddss, sizeof(vaddss), 1);
+    exercise_vadd(GEM_I386_ENGINE_JIT, vaddss, sizeof(vaddss), 1);
     exercise_xsaveopt_gate();
     expect_protection(xsave_esi, sizeof(xsave_esi), DATA + 1U, 0U);
     expect_protection(xgetbv, sizeof(xgetbv), DATA, 1U);

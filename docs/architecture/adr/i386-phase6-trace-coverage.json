@@ -9,9 +9,9 @@
    "notepad": "437e17a90482bc51ccd2dfc90db0efb5e1a2b50b5d9dc31a2166995de3a7a7c0",
    "steamsetup": "3a264217dd0e2dd27ea935a13e07883646c0e6848ede6220f0b2ad03acf9704e"
   },
-  "phase4Generator": "6e82f9d5e4eba2b5f5c4e7b913b01127d01c13bca75b3545530e4705d910d2fc",
-  "phase3Records": "0a565a3fb078071847f9d06bd51336e2084199603611a6e11cc83748f95e5fb1",
-  "phase3Reference": "fb8a1f249d08b81d93e5acbf715fc63801a77f185135e24c70cea81c535ddd06",
+  "phase4Generator": "f2f09d3e1cb136903839bceeaeff66c9b1004dfe3bb7f21159ad278d763d62a1",
+  "phase3Records": "96997534f3f27742d8673f6dcadb6deb331065dda83ef441b262974e18e32241",
+  "phase3Reference": "5d1e0f1e392edd21f919266b6569ae4b2db344806318e603106f349efa9443ae",
   "rosettaMatrix": "31cf28b1f6a61261296bba11fa90c9b0e9d9f1577f68d30d27ebc70499984964"
  },
  "traceSummary": {
@@ -39,9 +39,9 @@
  },
  "totals": {
   "tracedHandlers": 96,
-  "corpusCoveredHandlers": 241,
+  "corpusCoveredHandlers": 247,
   "tracedUncoveredHandlers": 14,
-  "corpusOnlyHandlers": 159
+  "corpusOnlyHandlers": 165
  },
  "prioritized": {
   "uncoveredByTraceFrequency": [
@@ -1208,6 +1208,31 @@
     "tracedCount": 0
    },
    {
+    "handlerId": 4850,
+    "name": "OpAndn",
+    "tracedCount": 0
+   },
+   {
+    "handlerId": 4851,
+    "name": "OpBls",
+    "tracedCount": 0
+   },
+   {
+    "handlerId": 4853,
+    "name": "Op2f5",
+    "tracedCount": 0
+   },
+   {
+    "handlerId": 4854,
+    "name": "Op2f6",
+    "tracedCount": 0
+   },
+   {
+    "handlerId": 4855,
+    "name": "Op2f7",
+    "tracedCount": 0
+   },
+   {
     "handlerId": 4872,
     "name": "OpSse4",
     "tracedCount": 0
@@ -1320,6 +1345,11 @@
    {
     "handlerId": 5087,
     "name": "OpAeskeygenassist",
+    "tracedCount": 0
+   },
+   {
+    "handlerId": 5104,
+    "name": "OpRorx",
     "tracedCount": 0
    }
   ]
@@ -5723,6 +5753,9 @@
    "tracedCount": 0,
    "tracedRuns": [],
    "corpusCoverage": {
+    "phase3": [
+     "137"
+    ],
     "rosetta": [
      "bits_bsf_1",
      "bits_bsf_2",
@@ -6988,6 +7021,68 @@
    }
   },
   {
+   "handlerId": 4850,
+   "name": "OpAndn",
+   "tracedCount": 0,
+   "tracedRuns": [],
+   "corpusCoverage": {
+    "phase3": [
+     "132"
+    ]
+   }
+  },
+  {
+   "handlerId": 4851,
+   "name": "OpBls",
+   "tracedCount": 0,
+   "tracedRuns": [],
+   "corpusCoverage": {
+    "phase3": [
+     "134",
+     "135",
+     "136"
+    ]
+   }
+  },
+  {
+   "handlerId": 4853,
+   "name": "Op2f5",
+   "tracedCount": 0,
+   "tracedRuns": [],
+   "corpusCoverage": {
+    "phase3": [
+     "138",
+     "139",
+     "140"
+    ]
+   }
+  },
+  {
+   "handlerId": 4854,
+   "name": "Op2f6",
+   "tracedCount": 0,
+   "tracedRuns": [],
+   "corpusCoverage": {
+    "phase3": [
+     "141"
+    ]
+   }
+  },
+  {
+   "handlerId": 4855,
+   "name": "Op2f7",
+   "tracedCount": 0,
+   "tracedRuns": [],
+   "corpusCoverage": {
+    "phase3": [
+     "133",
+     "142",
+     "143",
+     "144"
+    ]
+   }
+  },
+  {
    "handlerId": 4872,
    "name": "OpSse4",
    "tracedCount": 0,
@@ -7379,7 +7474,18 @@
      "719"
     ]
    }
+  },
+  {
+   "handlerId": 5104,
+   "name": "OpRorx",
+   "tracedCount": 0,
+   "tracedRuns": [],
+   "corpusCoverage": {
+    "phase3": [
+     "145"
+    ]
+   }
   }
  ],
- "resultsSha256": "56911cde9319aaa3ec31cfec20c871943dcd48f6e9f86d0f6affbe508a272595"
+ "resultsSha256": "1a2d7c3ef26956a8a2c5cb35bb8f7dc03626530ee4ed59c7369119830d34c6f1"
 }

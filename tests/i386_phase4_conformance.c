@@ -122,7 +122,10 @@ int main(void) {
             struct i386_phase4_record interpreter;
             struct i386_phase4_record jit;
             assert(i386_phase4_generate(shard, ordinal, &test));
-            assert(i386_phase4_execute(&test, GEM_I386_ENGINE_INTERPRETER, &interpreter));
+            if (!i386_phase4_execute(&test, GEM_I386_ENGINE_INTERPRETER, &interpreter))
+                fprintf(stderr, "Phase 4 execution failure shard=%u case=%u template=%u\n", shard,
+                        ordinal, test.template_id);
+            assert(interpreter.classification == I386_PHASE4_PASS);
             assert(i386_phase4_execute(&test, GEM_I386_ENGINE_JIT, &jit));
             if (!i386_phase4_records_match(&interpreter, &jit))
                 fprintf(stderr, "Phase 4 mismatch shard=%u case=%u template=%u category=%s\n",

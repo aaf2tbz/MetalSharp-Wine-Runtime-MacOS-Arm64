@@ -154,3 +154,12 @@ advertises RDTSCP after the GEM adapter qualifies its deterministic virtual
 timestamp implementation. The host-backed Blink handler remains excluded;
 SharpWine returns the committed retired-instruction counter in EDX:EAX and a
 fixed guest TSC_AUX of zero in ECX in both interpreter and JIT modes.
+
+`0022-gem-i386-avx-foundation.patch` (SHA-256
+`edbe07e90ab3648311d09a5eef2789a94b98dc1b10ef0917bf7006013b6166ec`)
+starts the deliberate native AVX implementation without advertising AVX yet.
+It corrects C5 `vvvv` decoding, adds VZEROUPPER/VZEROALL and reviewed
+VEX.128 floating-point/scalar three-operand forms, enforces architectural
+upper-lane zeroing, and emits the portable semantic helper through Blink's
+real JIT hook. The complete AVX CPUID gate remains closed until 256-bit and
+cross-lane coverage is implemented and qualified.
