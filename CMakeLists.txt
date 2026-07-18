@@ -187,6 +187,7 @@ if(MSWR_ENABLE_X64_ENGINE OR MSWR_ENABLE_I386_ENGINE)
         --avx-cross-lane-patch "${CMAKE_CURRENT_SOURCE_DIR}/third_party/patches/blink/0026-gem-i386-avx-cross-lane.patch"
         --avx-shift-patch "${CMAKE_CURRENT_SOURCE_DIR}/third_party/patches/blink/0027-gem-i386-avx-immediate-shifts.patch"
         --avx-misc-patch "${CMAKE_CURRENT_SOURCE_DIR}/third_party/patches/blink/0028-gem-i386-avx-misc-destinations.patch"
+        --avx-mask-patch "${CMAKE_CURRENT_SOURCE_DIR}/third_party/patches/blink/0029-gem-i386-avx-mask-moves.patch"
         --capability-manifest "${CMAKE_CURRENT_SOURCE_DIR}/docs/architecture/adr/i386-phase3-capabilities.json"
         --phase3-corpus "${CMAKE_CURRENT_SOURCE_DIR}/tests/i386_phase3_conformance.c"
         --provenance "${CMAKE_CURRENT_SOURCE_DIR}/docs/architecture/adr/0008-blink-embedding.provenance.json"

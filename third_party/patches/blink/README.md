@@ -210,3 +210,11 @@ packed-string comparisons, and LDMXCSR/STMXCSR across their GPR, flags, MXCSR,
 memory, and implicit-vector destination shapes. Exact VEX admission precedes
 reviewed legacy semantics; new portable handlers retain width and upper-lane
 contracts in interpreter and JIT modes.
+
+`0029-gem-i386-avx-mask-moves.patch` (SHA-256
+`ba601314d5f62d4bc4d0ecca51f2ce468bffa4beda2b36a7a4a179af986eb201`)
+implements VMASKMOVPS/PD and VMASKMOVDQU with inactive-element fault
+suppression, zero-filled masked loads, and preflighted restartable stores.
+Selected lanes are coalesced into one GEM transaction span so every write is
+retained, while inactive trailing pages remain untouched; the overlap stash
+is also widened to the 32-byte maximum used by native AVX moves.

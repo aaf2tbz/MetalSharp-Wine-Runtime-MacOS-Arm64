@@ -50,6 +50,9 @@ static const uint8_t vmovd_to_eax[] = {0xc5U, 0xf9U, 0x7eU, 0xc0U};
 static const uint8_t vucomiss_xmm[] = {0xc5U, 0xf8U, 0x2eU, 0xcaU};
 static const uint8_t vldmxcsr_esi[] = {0xc5U, 0xf8U, 0xaeU, 0x16U};
 static const uint8_t vstmxcsr_esi[] = {0xc5U, 0xf8U, 0xaeU, 0x1eU};
+static const uint8_t vmaskmovps_ymm_load[] = {0xc4U, 0xe2U, 0x75U, 0x2cU, 0x06U};
+static const uint8_t vmaskmovps_ymm_store[] = {0xc4U, 0xe2U, 0x75U, 0x2eU, 0x16U};
+static const uint8_t vmaskmovdqu[] = {0xc5U, 0xf9U, 0xf7U, 0xd1U};
 
 static void put32(uint8_t *p, uint32_t value) {
     p[0] = (uint8_t)value;
@@ -660,6 +663,99 @@ static void exercise_avx_misc_destinations(enum gem_i386_engine_mode mode) {
     gem_memory_destroy(memory);
 }
 
+static void exercise_avx_mask_moves(enum gem_i386_engine_mode mode) {
+    const uint32_t operand = DATA + GEM_GUEST_PAGE_SIZE - 16U;
+    const uint32_t values[8] = {11U, 22U, 33U, 44U, 55U, 66U, 77U, 88U};
+    const uint32_t load_mask[8] = {UINT32_C(0x80000000),
+                                   UINT32_C(0x80000000),
+                                   UINT32_C(0x80000000),
+                                   UINT32_C(0x80000000),
+                                   0U,
+                                   0U,
+                                   0U,
+                                   0U};
+    const uint32_t store_mask[8] = {UINT32_C(0x80000000), 0U, 0U, 0U,
+                                    UINT32_C(0x80000000), 0U, 0U, 0U};
+    const uint8_t bytes[16] = {0x10U, 0x11U, 0x12U, 0x13U, 0x14U, 0x15U, 0x16U, 0x17U,
+                               0x18U, 0x19U, 0x1aU, 0x1bU, 0x1cU, 0x1dU, 0x1eU, 0x1fU};
+    uint8_t byte_mask[16], expected[16], actual[16];
+    uint32_t lower[4], upper;
+    struct gem_memory *memory;
+    struct gem_i386_runtime *runtime;
+    struct gem_i386_context context;
+    struct gem_i386_stop_info stop;
+    size_t i;
+
+    memory = make_memory(vmaskmovps_ymm_load, sizeof(vmaskmovps_ymm_load), GEM_GUEST_PAGE_SIZE);
+    runtime = make_runtime(memory, mode, sizeof(vmaskmovps_ymm_load));
+    assert(runtime != NULL);
+    assert(gem_i386_memory_write(memory, operand, values, 16U) == GEM_MEMORY_OK);
+    initialize(&context, operand, 0U);
+    memcpy(&context.xmm[1], load_mask, 16U);
+    memcpy(&context.ymm_upper[1], load_mask + 4, 16U);
+    context.xmm[0].lo = UINT64_MAX;
+    context.xmm[0].hi = UINT64_MAX;
+    context.ymm_upper[0].lo = UINT64_MAX;
+    context.ymm_upper[0].hi = UINT64_MAX;
+    assert(gem_i386_runtime_run(runtime, &context, 1U) == GEM_STOP_HOST_RETURN);
+    assert(memcmp(&context.xmm[0], values, 16U) == 0);
+    assert(context.ymm_upper[0].lo == 0U && context.ymm_upper[0].hi == 0U);
+    gem_i386_runtime_destroy(runtime);
+    gem_memory_destroy(memory);
+
+    memory = make_memory(vmaskmovps_ymm_store, sizeof(vmaskmovps_ymm_store), GEM_GUEST_PAGE_SIZE);
+    runtime = make_runtime(memory, mode, sizeof(vmaskmovps_ymm_store));
+    assert(runtime != NULL);
+    memset(lower, 0x5a, sizeof(lower));
+    assert(gem_i386_memory_write(memory, operand, lower, sizeof(lower)) == GEM_MEMORY_OK);
+    initialize(&context, operand, 0U);
+    memcpy(&context.xmm[1], store_mask, 16U);
+    memcpy(&context.ymm_upper[1], store_mask + 4, 16U);
+    memcpy(&context.xmm[2], values, 16U);
+    memcpy(&context.ymm_upper[2], values + 4, 16U);
+    assert(gem_i386_runtime_run(runtime, &context, 1U) == GEM_STOP_MEMORY_FAULT);
+    assert(gem_i386_runtime_last_stop_info(runtime, &stop));
+    assert(stop.fault_address == DATA + GEM_GUEST_PAGE_SIZE);
+    assert(context.eip == CODE);
+    assert(memcmp(&context.xmm[1], store_mask, 16U) == 0);
+    assert(memcmp(&context.ymm_upper[1], store_mask + 4, 16U) == 0);
+    assert(memcmp(&context.xmm[2], values, 16U) == 0);
+    assert(memcmp(&context.ymm_upper[2], values + 4, 16U) == 0);
+    memset(actual, 0, sizeof(actual));
+    assert(gem_i386_memory_read(memory, operand, actual, sizeof(actual)) == GEM_MEMORY_OK);
+    assert(memcmp(actual, lower, sizeof(lower)) == 0);
+    assert(gem_i386_memory_commit(memory, DATA + GEM_GUEST_PAGE_SIZE, GEM_GUEST_PAGE_SIZE,
+                                  GEM_PAGE_READWRITE) == GEM_MEMORY_OK);
+    assert(gem_i386_runtime_run(runtime, &context, 1U) == GEM_STOP_HOST_RETURN);
+    assert(gem_i386_memory_read(memory, operand, lower, sizeof(lower)) == GEM_MEMORY_OK);
+    assert(lower[0] == values[0]);
+    assert(lower[1] == UINT32_C(0x5a5a5a5a));
+    assert(gem_i386_memory_read(memory, DATA + GEM_GUEST_PAGE_SIZE, &upper, sizeof(upper)) ==
+           GEM_MEMORY_OK);
+    assert(upper == values[4]);
+    gem_i386_runtime_destroy(runtime);
+    gem_memory_destroy(memory);
+
+    for (i = 0U; i < sizeof(byte_mask); ++i) {
+        byte_mask[i] = (i & 1U) ? 0U : 0x80U;
+        expected[i] = (i & 1U) ? 0x5aU : bytes[i];
+    }
+    memory = make_memory(vmaskmovdqu, sizeof(vmaskmovdqu), GEM_GUEST_PAGE_SIZE);
+    runtime = make_runtime(memory, mode, sizeof(vmaskmovdqu));
+    assert(runtime != NULL);
+    memset(actual, 0x5a, sizeof(actual));
+    assert(gem_i386_memory_write(memory, DATA, actual, sizeof(actual)) == GEM_MEMORY_OK);
+    initialize(&context, DATA, 0U);
+    context.gpr[GEM_I386_EDI] = DATA;
+    memcpy(&context.xmm[1], byte_mask, sizeof(byte_mask));
+    memcpy(&context.xmm[2], bytes, sizeof(bytes));
+    assert(gem_i386_runtime_run(runtime, &context, 1U) == GEM_STOP_HOST_RETURN);
+    assert(gem_i386_memory_read(memory, DATA, actual, sizeof(actual)) == GEM_MEMORY_OK);
+    assert(memcmp(actual, expected, sizeof(expected)) == 0);
+    gem_i386_runtime_destroy(runtime);
+    gem_memory_destroy(memory);
+}
+
 static void exercise_promoted128(enum gem_i386_engine_mode mode, const uint8_t *code,
                                  size_t code_size, unsigned operation) {
     struct gem_memory *memory = make_memory(code, code_size, GEM_GUEST_PAGE_SIZE);
@@ -783,6 +879,8 @@ int main(void) {
     exercise_avx_immediate_shifts(GEM_I386_ENGINE_JIT);
     exercise_avx_misc_destinations(GEM_I386_ENGINE_INTERPRETER);
     exercise_avx_misc_destinations(GEM_I386_ENGINE_JIT);
+    exercise_avx_mask_moves(GEM_I386_ENGINE_INTERPRETER);
+    exercise_avx_mask_moves(GEM_I386_ENGINE_JIT);
     exercise_promoted128(GEM_I386_ENGINE_INTERPRETER, vpaddd_xmm, sizeof(vpaddd_xmm), 0U);
     exercise_promoted128(GEM_I386_ENGINE_JIT, vpaddd_xmm, sizeof(vpaddd_xmm), 0U);
     exercise_vmovhlps(GEM_I386_ENGINE_INTERPRETER);
