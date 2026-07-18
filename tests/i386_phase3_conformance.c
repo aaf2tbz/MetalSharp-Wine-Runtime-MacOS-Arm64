@@ -846,7 +846,7 @@ static void expect_masked_instruction(const uint8_t *code, size_t code_size) {
 }
 
 static void verify_masked_instructions(void) {
-    static const uint8_t avx2[] = {0xc5U, 0xfdU, 0xfeU, 0xc1U};
+    static const uint8_t avx2[] = {0xc4U, 0xe2U, 0x75U, 0x36U, 0xc2U};
     static const uint8_t fma[] = {0xc4U, 0xe2U, 0x71U, 0x98U, 0xc1U};
     static const uint8_t invalid_bmi2_prefix[] = {0xc4U, 0xe2U, 0x71U, 0xf5U, 0xd8U};
     static const uint8_t invalid_legacy_bmi2[] = {0x0fU, 0x38U, 0xf5U, 0xd8U};

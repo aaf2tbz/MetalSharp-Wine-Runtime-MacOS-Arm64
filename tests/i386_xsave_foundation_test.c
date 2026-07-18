@@ -76,6 +76,14 @@ static const uint8_t vlddqu_ymm_esi[] = {0xc5U, 0xffU, 0xf0U, 0x06U};
 static const uint8_t vroundps_ymm[] = {0xc4U, 0xe3U, 0x7dU, 0x08U, 0xc1U, 0x00U};
 static const uint8_t vblendps_ymm[] = {0xc4U, 0xe3U, 0x75U, 0x0cU, 0xc2U, 0xaaU};
 static const uint8_t vdpps_ymm[] = {0xc4U, 0xe3U, 0x75U, 0x40U, 0xc2U, 0xffU};
+static const uint8_t vpaddd_ymm[] = {0xc5U, 0xf5U, 0xfeU, 0xc2U};
+static const uint8_t vpshufb_ymm[] = {0xc4U, 0xe2U, 0x75U, 0x00U, 0xc2U};
+static const uint8_t vpalignr_ymm[] = {0xc4U, 0xe3U, 0x75U, 0x0fU, 0xc2U, 0x08U};
+static const uint8_t vpshufd_ymm[] = {0xc5U, 0xfdU, 0x70U, 0xc1U, 0x1bU};
+static const uint8_t vpsrld_ymm_imm[] = {0xc5U, 0xfdU, 0x72U, 0xd1U, 0x04U};
+static const uint8_t vpslld_ymm_count[] = {0xc5U, 0xf5U, 0xf2U, 0xc2U};
+static const uint8_t vpmovmskb_ymm[] = {0xc5U, 0xfdU, 0xd7U, 0xc1U};
+static const uint8_t vpblendvb_ymm[] = {0xc4U, 0xe3U, 0x75U, 0x4cU, 0xc2U, 0x30U};
 
 static void put32(uint8_t *p, uint32_t value) {
     p[0] = (uint8_t)value;
@@ -1073,6 +1081,114 @@ static void exercise_avx_inventory_closures(enum gem_i386_engine_mode mode) {
 #undef RUN_YMM_REGISTER
 }
 
+static void exercise_avx2_packed_lanes(enum gem_i386_engine_mode mode) {
+    const uint32_t first[8] = {1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U};
+    const uint32_t second[8] = {10U, 20U, 30U, 40U, 50U, 60U, 70U, 80U};
+    const uint32_t added[8] = {11U, 22U, 33U, 44U, 55U, 66U, 77U, 88U};
+    const uint32_t reversed[8] = {4U, 3U, 2U, 1U, 8U, 7U, 6U, 5U};
+    const uint32_t shift_input[8] = {0x10U, 0x20U, 0x30U, 0x40U, 0x50U, 0x60U, 0x70U, 0x80U};
+    const uint32_t shifted_right[8] = {1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U};
+    const uint32_t shifted_left[8] = {0x100U, 0x200U, 0x300U, 0x400U,
+                                      0x500U, 0x600U, 0x700U, 0x800U};
+    uint8_t bytes[32], control[32], shuffled[32], align_first[32], align_second[32], aligned[32];
+    uint8_t blend_first[32], blend_second[32], blend_mask[32], blended_bytes[32];
+    struct gem_memory *memory;
+    struct gem_i386_runtime *runtime;
+    struct gem_i386_context context;
+    unsigned i;
+
+#define RUN_AVX2(code)                                                                             \
+    do {                                                                                           \
+        memory = make_memory((code), sizeof(code), GEM_GUEST_PAGE_SIZE);                           \
+        runtime = make_runtime(memory, mode, sizeof(code));                                        \
+        assert(runtime != NULL);                                                                   \
+        assert(gem_i386_runtime_run(runtime, &context, 1U) == GEM_STOP_HOST_RETURN);               \
+        gem_i386_runtime_destroy(runtime);                                                         \
+        gem_memory_destroy(memory);                                                                \
+    } while (0)
+
+    initialize(&context, DATA, 0U);
+    memcpy(&context.xmm[1], first, 16U);
+    memcpy(&context.ymm_upper[1], first + 4, 16U);
+    memcpy(&context.xmm[2], second, 16U);
+    memcpy(&context.ymm_upper[2], second + 4, 16U);
+    RUN_AVX2(vpaddd_ymm);
+    assert(memcmp(&context.xmm[0], added, 16U) == 0);
+    assert(memcmp(&context.ymm_upper[0], added + 4, 16U) == 0);
+
+    for (i = 0U; i < 32U; ++i) {
+        bytes[i] = (uint8_t)i;
+        control[i] = (uint8_t)(15U - (i & 15U));
+        shuffled[i] = (uint8_t)((i & 16U) + 15U - (i & 15U));
+        align_first[i] = 0x11U;
+        align_second[i] = 0x22U;
+        aligned[i] = (i & 15U) < 8U ? 0x22U : 0x11U;
+        blend_first[i] = 0x11U;
+        blend_second[i] = 0x22U;
+        blend_mask[i] = (i & 1U) != 0U ? 0x80U : 0U;
+        blended_bytes[i] = (i & 1U) != 0U ? 0x22U : 0x11U;
+    }
+    initialize(&context, DATA, 0U);
+    memcpy(&context.xmm[1], bytes, 16U);
+    memcpy(&context.ymm_upper[1], bytes + 16, 16U);
+    memcpy(&context.xmm[2], control, 16U);
+    memcpy(&context.ymm_upper[2], control + 16, 16U);
+    RUN_AVX2(vpshufb_ymm);
+    assert(memcmp(&context.xmm[0], shuffled, 16U) == 0);
+    assert(memcmp(&context.ymm_upper[0], shuffled + 16, 16U) == 0);
+
+    initialize(&context, DATA, 0U);
+    memcpy(&context.xmm[1], align_first, 16U);
+    memcpy(&context.ymm_upper[1], align_first + 16, 16U);
+    memcpy(&context.xmm[2], align_second, 16U);
+    memcpy(&context.ymm_upper[2], align_second + 16, 16U);
+    RUN_AVX2(vpalignr_ymm);
+    assert(memcmp(&context.xmm[0], aligned, 16U) == 0);
+    assert(memcmp(&context.ymm_upper[0], aligned + 16, 16U) == 0);
+
+    initialize(&context, DATA, 0U);
+    memcpy(&context.xmm[1], first, 16U);
+    memcpy(&context.ymm_upper[1], first + 4, 16U);
+    RUN_AVX2(vpshufd_ymm);
+    assert(memcmp(&context.xmm[0], reversed, 16U) == 0);
+    assert(memcmp(&context.ymm_upper[0], reversed + 4, 16U) == 0);
+
+    initialize(&context, DATA, 0U);
+    memcpy(&context.xmm[1], shift_input, 16U);
+    memcpy(&context.ymm_upper[1], shift_input + 4, 16U);
+    RUN_AVX2(vpsrld_ymm_imm);
+    assert(memcmp(&context.xmm[0], shifted_right, 16U) == 0);
+    assert(memcmp(&context.ymm_upper[0], shifted_right + 4, 16U) == 0);
+
+    initialize(&context, DATA, 0U);
+    memcpy(&context.xmm[1], shift_input, 16U);
+    memcpy(&context.ymm_upper[1], shift_input + 4, 16U);
+    context.xmm[2].lo = 4U;
+    context.ymm_upper[2].lo = UINT64_MAX;
+    RUN_AVX2(vpslld_ymm_count);
+    assert(memcmp(&context.xmm[0], shifted_left, 16U) == 0);
+    assert(memcmp(&context.ymm_upper[0], shifted_left + 4, 16U) == 0);
+
+    initialize(&context, DATA, 0U);
+    memcpy(&context.xmm[1], blend_mask, 16U);
+    memcpy(&context.ymm_upper[1], blend_mask + 16, 16U);
+    RUN_AVX2(vpmovmskb_ymm);
+    assert(context.gpr[GEM_I386_EAX] == UINT32_C(0xaaaaaaaa));
+
+    initialize(&context, DATA, 0U);
+    memcpy(&context.xmm[1], blend_first, 16U);
+    memcpy(&context.ymm_upper[1], blend_first + 16, 16U);
+    memcpy(&context.xmm[2], blend_second, 16U);
+    memcpy(&context.ymm_upper[2], blend_second + 16, 16U);
+    memcpy(&context.xmm[3], blend_mask, 16U);
+    memcpy(&context.ymm_upper[3], blend_mask + 16, 16U);
+    RUN_AVX2(vpblendvb_ymm);
+    assert(memcmp(&context.xmm[0], blended_bytes, 16U) == 0);
+    assert(memcmp(&context.ymm_upper[0], blended_bytes + 16, 16U) == 0);
+
+#undef RUN_AVX2
+}
+
 static void exercise_promoted128(enum gem_i386_engine_mode mode, const uint8_t *code,
                                  size_t code_size, unsigned operation) {
     struct gem_memory *memory = make_memory(code, code_size, GEM_GUEST_PAGE_SIZE);
@@ -1206,6 +1322,8 @@ int main(void) {
     exercise_avx_register_moves(GEM_I386_ENGINE_JIT);
     exercise_avx_inventory_closures(GEM_I386_ENGINE_INTERPRETER);
     exercise_avx_inventory_closures(GEM_I386_ENGINE_JIT);
+    exercise_avx2_packed_lanes(GEM_I386_ENGINE_INTERPRETER);
+    exercise_avx2_packed_lanes(GEM_I386_ENGINE_JIT);
     exercise_promoted128(GEM_I386_ENGINE_INTERPRETER, vpaddd_xmm, sizeof(vpaddd_xmm), 0U);
     exercise_promoted128(GEM_I386_ENGINE_JIT, vpaddd_xmm, sizeof(vpaddd_xmm), 0U);
     exercise_vmovhlps(GEM_I386_ENGINE_INTERPRETER);

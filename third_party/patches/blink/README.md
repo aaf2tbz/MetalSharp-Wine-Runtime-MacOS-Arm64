@@ -239,3 +239,11 @@ advertises XSAVE, OSXSAVE, and AVX only after interpreter/JIT semantics,
 XSAVE leaf `0x0d`, the pinned XED inventory, and a loaded multi-instruction
 AVX guest program all pass. The program witness also closed native 256-bit
 VMOVUPS/VMOVAPS load admission rather than masking the working AVX family.
+
+`0033-gem-i386-avx2-packed-lanes.patch` (SHA-256
+`718756acae955e46b380d12c57d9098bf67982c6866aa3dd34aacd1ae6ed76a4`)
+starts the deliberate native AVX2 implementation across 256-bit packed
+integer arithmetic, comparisons, packing, unpacking, shuffles, blends,
+movemasks, and immediate/shared-count shifts. Lane-local operations reuse
+reviewed portable 128-bit semantics; count shifts use an exact 128-bit count
+operand for both YMM lanes and preserve precise memory access widths.

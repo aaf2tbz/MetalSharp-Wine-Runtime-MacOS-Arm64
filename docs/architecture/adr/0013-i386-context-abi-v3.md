@@ -196,9 +196,11 @@ stays at `GEM_WINE_BOUNDARY_ABI_VERSION` 1.
   translates that identity to `EXCEPTION_PRIV_INSTRUCTION`, never
   silently ignoring it and never allowing a narrower mask (state would be
   lost) or a wider one (unsupported state).
-- CPUID rules follow from the mask: leaf 1 ECX keeps OSXSAVE (bit 27), XSAVE
-  (bit 26), AVX (bit 28), and FMA (bit 12) at 0 until the W5 gate passes.
-  Leaf 0x0d is reported only once the XSAVE bit is set, and then exactly per
+- CPUID rules follow from the mask. Patch 0032 advertises OSXSAVE (bit 27),
+  XSAVE (bit 26), and AVX (bit 28) after their W5 semantic, state/fault,
+  interpreter/JIT, inventory, corpus, and loaded-program gates pass; FMA
+  (bit 12) remains 0 until its own gate passes. Leaf 0x0d is then reported
+  exactly per
   Intel's leaf-0DH definition: subleaf 0: eax = 0x7 (supported-state mask),
   ebx = 832 (bytes required for enabled states under XCR0 = 0x7: 512 legacy
   + 64 header + 256 YMM), ecx = 832 (maximum for all supported states),
@@ -206,8 +208,9 @@ stays at `GEM_WINE_BOUNDARY_ABI_VERSION` 1.
   (no XSAVEOPT/XSAVEC/XSAVES features, see c); subleaf 2: eax = 256 (YMM
   component size), ebx = 576 (YMM component offset), ecx = 0, edx = 0.
   Subleaves above 2 report eax = ebx = ecx = edx = 0.
-- OSXSAVE stays masked until W5's reviewed gate; until then all of this state
-  is inert and zero (see g).
+- Before patch 0032's reviewed W5 gate, OSXSAVE stayed masked and this state
+  was inert and zero (see g). It is now advertised with the qualified AVX
+  family while unsupported extended-state features remain zero.
 
 ### c. xsave area semantics
 
