@@ -163,3 +163,11 @@ VEX.128 floating-point/scalar three-operand forms, enforces architectural
 upper-lane zeroing, and emits the portable semantic helper through Blink's
 real JIT hook. The complete AVX CPUID gate remains closed until 256-bit and
 cross-lane coverage is implemented and qualified.
+
+`0023-gem-i386-avx-packed-lanes.patch` (SHA-256
+`b785875a9d54f3d0953cd37e173922ebad16da4c1520e49db728dca540d6932f`)
+extends the native implementation across promoted 256-bit AVX floating-point
+operations. It executes both architectural 128-bit lanes in one checked GEM
+transaction, snapshots the complete memory source before changing destination
+state, preserves precise cross-page faults, and commits both YMM halves
+together through the same interpreter/JIT semantic helper.

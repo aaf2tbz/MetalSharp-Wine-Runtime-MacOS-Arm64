@@ -181,6 +181,7 @@ if(MSWR_ENABLE_X64_ENGINE OR MSWR_ENABLE_I386_ENGINE)
         --bmi2-patch "${CMAKE_CURRENT_SOURCE_DIR}/third_party/patches/blink/0020-gem-i386-bmi2.patch"
         --rdtscp-patch "${CMAKE_CURRENT_SOURCE_DIR}/third_party/patches/blink/0021-gem-i386-rdtscp.patch"
         --avx-foundation-patch "${CMAKE_CURRENT_SOURCE_DIR}/third_party/patches/blink/0022-gem-i386-avx-foundation.patch"
+        --avx-packed-patch "${CMAKE_CURRENT_SOURCE_DIR}/third_party/patches/blink/0023-gem-i386-avx-packed-lanes.patch"
         --capability-manifest "${CMAKE_CURRENT_SOURCE_DIR}/docs/architecture/adr/i386-phase3-capabilities.json"
         --phase3-corpus "${CMAKE_CURRENT_SOURCE_DIR}/tests/i386_phase3_conformance.c"
         --provenance "${CMAKE_CURRENT_SOURCE_DIR}/docs/architecture/adr/0008-blink-embedding.provenance.json"
