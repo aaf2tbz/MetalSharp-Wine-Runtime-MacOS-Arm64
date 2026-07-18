@@ -14,6 +14,7 @@
 #define XSTATE_SIZE 832U
 
 static const uint8_t xgetbv[] = {0x0fU, 0x01U, 0xd0U};
+static const uint8_t cpuid[] = {0x0fU, 0xa2U};
 static const uint8_t xsetbv[] = {0x0fU, 0x01U, 0xd1U};
 static const uint8_t xsave_esi[] = {0x0fU, 0xaeU, 0x26U};
 static const uint8_t xrstor_esi[] = {0x0fU, 0xaeU, 0x2eU};
@@ -24,6 +25,8 @@ static const uint8_t vaddps[] = {0xc5U, 0xf0U, 0x58U, 0xc2U};
 static const uint8_t vaddss[] = {0xc5U, 0xf2U, 0x58U, 0xc2U};
 static const uint8_t vaddps_ymm[] = {0xc5U, 0xf4U, 0x58U, 0xc2U};
 static const uint8_t vaddps_ymm_esi[] = {0xc5U, 0xf4U, 0x58U, 0x06U};
+static const uint8_t vmovups_ymm_load[] = {0xc5U, 0xfcU, 0x10U, 0x06U};
+static const uint8_t vmovaps_ymm_load[] = {0xc5U, 0xfcU, 0x28U, 0x06U};
 static const uint8_t vmovups_ymm_store[] = {0xc5U, 0xfcU, 0x11U, 0x06U};
 static const uint8_t vmovaps_ymm_store[] = {0xc5U, 0xfcU, 0x29U, 0x06U};
 static const uint8_t vmovss_store[] = {0xc5U, 0xfaU, 0x11U, 0x06U};
@@ -157,6 +160,41 @@ static void exercise_xgetbv(enum gem_i386_engine_mode mode) {
     assert(context.gpr[GEM_I386_EAX] == 7U && context.gpr[GEM_I386_EDX] == 0U);
     gem_i386_runtime_destroy(runtime);
     gem_memory_destroy(memory);
+}
+
+static struct gem_i386_context execute_cpuid(enum gem_i386_engine_mode mode, uint32_t leaf,
+                                             uint32_t subleaf) {
+    struct gem_memory *memory = make_memory(cpuid, sizeof(cpuid), GEM_GUEST_PAGE_SIZE);
+    struct gem_i386_runtime *runtime = make_runtime(memory, mode, sizeof(cpuid));
+    struct gem_i386_context context;
+    assert(runtime != NULL);
+    initialize(&context, DATA, 0U);
+    context.gpr[GEM_I386_EAX] = leaf;
+    context.gpr[GEM_I386_ECX] = subleaf;
+    assert(gem_i386_runtime_run(runtime, &context, 1U) == GEM_STOP_HOST_RETURN);
+    gem_i386_runtime_destroy(runtime);
+    gem_memory_destroy(memory);
+    return context;
+}
+
+static void exercise_avx_cpuid(enum gem_i386_engine_mode mode) {
+    struct gem_i386_context context = execute_cpuid(mode, 0U, 0U);
+    assert(context.gpr[GEM_I386_EAX] == 0x0dU);
+    context = execute_cpuid(mode, 1U, 0U);
+    assert((context.gpr[GEM_I386_ECX] & ((1U << 26U) | (1U << 27U) | (1U << 28U))) ==
+           ((1U << 26U) | (1U << 27U) | (1U << 28U)));
+    context = execute_cpuid(mode, 0x0dU, 0U);
+    assert(context.gpr[GEM_I386_EAX] == GEM_I386_XCR0_SUPPORTED);
+    assert(context.gpr[GEM_I386_EBX] == XSTATE_SIZE);
+    assert(context.gpr[GEM_I386_ECX] == XSTATE_SIZE);
+    assert(context.gpr[GEM_I386_EDX] == 0U);
+    context = execute_cpuid(mode, 0x0dU, 1U);
+    assert(context.gpr[GEM_I386_EAX] == 0U && context.gpr[GEM_I386_EBX] == 0U &&
+           context.gpr[GEM_I386_ECX] == 0U && context.gpr[GEM_I386_EDX] == 0U);
+    context = execute_cpuid(mode, 0x0dU, 2U);
+    assert(context.gpr[GEM_I386_EAX] == 256U);
+    assert(context.gpr[GEM_I386_EBX] == 576U);
+    assert(context.gpr[GEM_I386_ECX] == 0U && context.gpr[GEM_I386_EDX] == 0U);
 }
 
 static void exercise_xsave(enum gem_i386_engine_mode mode) {
@@ -949,6 +987,25 @@ static void exercise_avx_inventory_closures(enum gem_i386_engine_mode mode) {
     struct gem_i386_runtime *runtime;
     struct gem_i386_context context;
 
+#define RUN_YMM_LOAD(code, source)                                                                 \
+    do {                                                                                           \
+        memory = make_memory((code), sizeof(code), GEM_GUEST_PAGE_SIZE);                           \
+        runtime = make_runtime(memory, mode, sizeof(code));                                        \
+        assert(runtime != NULL);                                                                   \
+        assert(gem_i386_memory_write(memory, DATA, (source), 32U) == GEM_MEMORY_OK);               \
+        initialize(&context, DATA, 0U);                                                            \
+        assert(gem_i386_runtime_run(runtime, &context, 1U) == GEM_STOP_HOST_RETURN);               \
+        assert(memcmp(&context.xmm[0], (source), 16U) == 0);                                       \
+        assert(memcmp(&context.ymm_upper[0], (source) + 4, 16U) == 0);                             \
+        gem_i386_runtime_destroy(runtime);                                                         \
+        gem_memory_destroy(memory);                                                                \
+    } while (0)
+
+    RUN_YMM_LOAD(vmovups_ymm_load, values);
+    RUN_YMM_LOAD(vmovaps_ymm_load, values);
+
+#undef RUN_YMM_LOAD
+
 #define RUN_YMM_REGISTER(code, source)                                                             \
     do {                                                                                           \
         memory = make_memory((code), sizeof(code), GEM_GUEST_PAGE_SIZE);                           \
@@ -1110,6 +1167,8 @@ static void exercise_xsaveopt_gate(void) {
 int main(void) {
     exercise_xgetbv(GEM_I386_ENGINE_INTERPRETER);
     exercise_xgetbv(GEM_I386_ENGINE_JIT);
+    exercise_avx_cpuid(GEM_I386_ENGINE_INTERPRETER);
+    exercise_avx_cpuid(GEM_I386_ENGINE_JIT);
     exercise_xsave(GEM_I386_ENGINE_INTERPRETER);
     exercise_xsave(GEM_I386_ENGINE_JIT);
     exercise_xrstor(GEM_I386_ENGINE_INTERPRETER);

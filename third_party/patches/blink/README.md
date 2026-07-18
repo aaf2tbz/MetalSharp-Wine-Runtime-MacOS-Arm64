@@ -232,3 +232,10 @@ closes gaps found by the pinned Intel XED AVX inventory review: register
 destinations for store-direction moves, scalar merge-register moves, 256-bit
 duplicate/unaligned loads, and lane-local packed round, blend, and dot-product
 forms. All retain non-destructive sources and exact upper-lane clearing.
+
+`0032-gem-i386-avx-cpuid.patch` (SHA-256
+`984497649191c8025670816f1fbfaa6d212f0b103b869f8f328e60399c315559`)
+advertises XSAVE, OSXSAVE, and AVX only after interpreter/JIT semantics,
+XSAVE leaf `0x0d`, the pinned XED inventory, and a loaded multi-instruction
+AVX guest program all pass. The program witness also closed native 256-bit
+VMOVUPS/VMOVAPS load admission rather than masking the working AVX family.

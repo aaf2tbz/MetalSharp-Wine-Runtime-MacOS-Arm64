@@ -317,6 +317,8 @@ def audit_phase3_capabilities(source_root, manifest_path, corpus_path):
         ("PCLMUL", "0x00000001", "ecx", 1), ("SSSE3", "0x00000001", "ecx", 9),
         ("SSE4.1", "0x00000001", "ecx", 19), ("SSE4.2", "0x00000001", "ecx", 20),
         ("POPCNT", "0x00000001", "ecx", 23), ("AES", "0x00000001", "ecx", 25),
+        ("XSAVE", "0x00000001", "ecx", 26), ("OSXSAVE", "0x00000001", "ecx", 27),
+        ("AVX", "0x00000001", "ecx", 28),
         ("ERMS", "0x00000007", "ebx", 9),
         ("BMI1", "0x00000007", "ebx", 3),
         ("BMI2", "0x00000007", "ebx", 8),
@@ -327,7 +329,7 @@ def audit_phase3_capabilities(source_root, manifest_path, corpus_path):
     need(actual == expected, "advertised CPUID capability drift")
     need(
         set(manifest["masked"])
-        == {"AVX", "AVX2", "FMA", "OSXSAVE", "ADX",
+        == {"AVX2", "FMA", "ADX",
             "FSGSBASE", "RDRAND", "RDSEED", "RDPID", "CX16", "LONG_MODE",
             "SYSCALL"},
         "masked CPUID capability drift",
@@ -338,7 +340,18 @@ def audit_phase3_capabilities(source_root, manifest_path, corpus_path):
         need(item["handlers"], f"missing handlers for {item['name']}")
         for handler in item["handlers"]:
             need(f"{handler}(" in sources, f"missing advertised handler {handler}")
-        need(item["witness"] in corpus, f"missing corpus witness for {item['name']}")
+        witness_source = corpus
+        if "witnessSource" in item:
+            witness_path = manifest_path.parents[3] / item["witnessSource"]
+            need(witness_path.is_file(), f"missing witness source for {item['name']}")
+            witness_source = witness_path.read_text()
+        need(item["witness"] in witness_source, f"missing corpus witness for {item['name']}")
+        if "cpuidWitness" in item:
+            need(item["cpuidWitness"] in witness_source,
+                 f"missing CPUID witness for {item['name']}")
+        if "programWitness" in item:
+            need(item["programWitness"] in corpus,
+                 f"missing program-loading witness for {item['name']}")
         for witness in item.get("opcodeWitnesses", ()):
             need(witness in corpus, f"missing opcode witness {item['name']} {witness}")
     sse41 = next(item for item in manifest["advertised"] if item["name"] == "SSE4.1")
@@ -384,13 +397,14 @@ def main():
     parser.add_argument("--avx-mask-patch", type=Path, required=True)
     parser.add_argument("--avx-conversion-patch", type=Path, required=True)
     parser.add_argument("--avx-inventory-patch", type=Path, required=True)
+    parser.add_argument("--avx-cpuid-patch", type=Path, required=True)
     parser.add_argument("--capability-manifest", type=Path, required=True)
     parser.add_argument("--phase3-corpus", type=Path, required=True)
     parser.add_argument("--provenance", type=Path, required=True)
     args = parser.parse_args()
 
     provenance = json.loads(args.provenance.read_text())
-    need(provenance["schemaVersion"] == 28, "provenance schema")
+    need(provenance["schemaVersion"] == 29, "provenance schema")
     need(provenance["revision"] == PINNED_REVISION, "revision")
     need(digest(args.patch) == provenance["patchSha256"], "patch hash")
     need(digest(args.jit_patch) == provenance["jitPatchSha256"], "JIT patch hash")
@@ -477,6 +491,10 @@ def main():
     need(
         digest(args.avx_inventory_patch) == provenance["avxInventoryPatchSha256"],
         "AVX inventory-closure patch hash",
+    )
+    need(
+        digest(args.avx_cpuid_patch) == provenance["avxCpuidPatchSha256"],
+        "AVX CPUID patch hash",
     )
     for relative, expected_hash in provenance["postPatch"].items():
         need(digest(args.source / relative) == expected_hash, f"hash {relative}")
