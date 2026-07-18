@@ -1,7 +1,7 @@
 # ADR 0013: i386 context ABI v3: YMM, XCR0, and xsave state
 
 Date: 2026-07-17
-Status: Proposed (reviewed ABI decision pending)
+Status: Accepted
 
 ## Context
 
@@ -77,8 +77,8 @@ Against the pinned tree `_deps/blink_gem-src` (jart/blink
   unconditionally, and modrm.reg 6 (XSAVEOPT) to `OpMfence` unconditionally.
   There is no xgetbv/xsetbv/xcr0 modeling anywhere: `Op101` register-form
   modrm.reg 2 (which includes XGETBV/XSETBV encodings 0x0f 0x01 0xd0-0xd7)
-  falls to `OpUdImpl` (`blink/op101.c:197-203`); `xcr0` appears in no source
-  file.
+  falls to `OpUdImpl` (`blink/op101.c:197-203`); `xcr0` appeared in no source
+  file before SharpWine blink patch 0017.
 - Consequence for today: a guest XSAVE/XRSTOR/XSAVEOPT would **retire as a
   silent no-op or wrong op**, not fault. This is currently survivable only
   because the legacy32 CPUID profile
@@ -88,14 +88,15 @@ Against the pinned tree `_deps/blink_gem-src` (jart/blink
   `blink/machine.c:2181-2192`) excludes decoded forms GEM cannot restore:
   0x1c7 with modrm.reg >= 6, REP-prefixed 0x1ae with modrm.reg <= 3, 0x101
   with modrm 0xd0/0xf9, VEX BMI mopcodes 0x2f2-0x2f7, and 0x3f0 (RORX).
-  Notably the plain 0x1ae xsave group is **not** in that mask; W5 must close
-  that before or while implementing the family.
+  Notably the plain 0x1ae xsave group was **not** in that mask; SharpWine blink
+  patch 0017 closes it by admitting implemented XSAVE/XRSTOR forms and
+  rejecting XSAVEOPT.
 
-**Finding, stated plainly: W5 implements AVX/XSAVE handlers in SharpWine's
-own blink patches. Upstream blink provides VEX decode and 128-bit VEX/BMI
-building blocks, but there is no existing AVX/XSAVE implementation to merely
-enable, and two group entries (XRSTOR, XSAVEOPT) must be replaced, not
-reused.**
+**Finding, stated plainly: SharpWine implements XSAVE/XRSTOR/XGETBV in blink
+patch 0017 and implements AVX handlers incrementally in W5. Upstream blink
+provides VEX decode and 128-bit VEX/BMI building blocks, but there was no
+existing AVX/XSAVE implementation to merely enable, and two group entries
+(XRSTOR, XSAVEOPT) had to be replaced, not reused.**
 
 ### Embedding seams to extend
 
@@ -252,9 +253,10 @@ with an unknown version, size, or layout fails closed.
 after `segments[6]`: `uint8_t ymm_upper[8][16]` (128 bytes) and
 `uint64_t xcr0` (8 bytes). `import_state` / `export_state` transfer both
 fields on every boundary in both directions. Because upstream blink has no
-YMM storage (`machine.h:403`), the W5 gem patch adds upper-half storage to
-the gem machine wrapper (`gem_embed.c`) and implements the AVX/XSAVE handlers
-in the patch; handlers that blink cannot execute must fail through the
+YMM storage (`machine.h:403`), SharpWine blink patches 0016–0017 add
+upper-half storage to the gem machine wrapper and Machine state, and implement
+the XSAVE handlers; AVX handlers follow incrementally in W5. Handlers that
+blink cannot execute must fail through the
 existing `BLINK_GEM_UNSUPPORTED` path, never through the silent
 XSAVE-stub/XRSTOR-as-LFENCE dispatches (c). The AArch64 JIT obligation is
 unchanged in kind: a VEX/AVX handler either receives reviewed JIT lowering or

@@ -112,3 +112,11 @@ a lightweight integer-state export between safe resident instructions.
 preallocates and serializes the embedding-only host-page registry so separate
 Blink machines can fault in shadow pages concurrently without racing a global
 registry reallocation.
+
+`0017-gem-i386-vex-xsave-foundation.patch` (SHA-256
+`6599e93fc0dd951e45eb124a24677f28d482871f133bbaf5f4d3cf6ff9b267e0`)
+adds protected-mode VEX disambiguation while retaining the per-family gate,
+implements standard-format XSAVE/XRSTOR and XGETBV over the ABI-v3 YMM/XCR0
+state, maps protection faults into a stable embedding exception, and rejects
+XSAVEOPT instead of inheriting Blink's incorrect fence dispatch. CPUID remains
+masked until the corresponding Phase 6 family gates pass.

@@ -329,6 +329,9 @@ enum gem_stop_reason gem_i386_blink_step(struct gem_i386_runtime *runtime,
         case BLINK_GEM_EXCEPTION_OVERFLOW:
             runtime->last_stop.engine_status = GEM_I386_EXCEPTION_INTEGER_OVERFLOW;
             break;
+        case BLINK_GEM_EXCEPTION_PROTECTION:
+            runtime->last_stop.engine_status = GEM_I386_EXCEPTION_GENERAL_PROTECTION;
+            break;
         default:
             return GEM_STOP_INVARIANT_VIOLATION;
         }
@@ -439,6 +442,9 @@ enum gem_stop_reason gem_i386_blink_run(struct gem_i386_runtime *runtime,
             break;
         case BLINK_GEM_EXCEPTION_OVERFLOW:
             runtime->last_stop.engine_status = GEM_I386_EXCEPTION_INTEGER_OVERFLOW;
+            break;
+        case BLINK_GEM_EXCEPTION_PROTECTION:
+            runtime->last_stop.engine_status = GEM_I386_EXCEPTION_GENERAL_PROTECTION;
             break;
         default:
             return GEM_STOP_INVARIANT_VIOLATION;

@@ -442,7 +442,6 @@ static void verify_masked_instructions(void) {
     static const uint8_t rdseed[] = {0x0fU, 0xc7U, 0xf8U};
     static const uint8_t rdpid[] = {0xf3U, 0x0fU, 0xc7U, 0xf8U};
     static const uint8_t fsgsbase[] = {0xf3U, 0x0fU, 0xaeU, 0xc0U};
-    static const uint8_t xgetbv[] = {0x0fU, 0x01U, 0xd0U};
     static const uint8_t rdtscp[] = {0x0fU, 0x01U, 0xf9U};
     expect_masked_instruction(avx, sizeof(avx));
     expect_masked_instruction(avx2, sizeof(avx2));
@@ -454,7 +453,6 @@ static void verify_masked_instructions(void) {
     expect_masked_instruction(rdseed, sizeof(rdseed));
     expect_masked_instruction(rdpid, sizeof(rdpid));
     expect_masked_instruction(fsgsbase, sizeof(fsgsbase));
-    expect_masked_instruction(xgetbv, sizeof(xgetbv));
     expect_masked_instruction(rdtscp, sizeof(rdtscp));
 }
 
