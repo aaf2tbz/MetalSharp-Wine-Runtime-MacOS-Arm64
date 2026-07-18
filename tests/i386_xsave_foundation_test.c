@@ -1716,6 +1716,44 @@ static void exercise_adx(enum gem_i386_engine_mode mode) {
                 run_adx_case(mode, adox != 0U, memory_operand != 0U, carry_in != 0U);
 }
 
+static void run_random_case(enum gem_i386_engine_mode mode, bool rdseed, bool word) {
+    uint8_t code[4] = {0x66U, 0x0fU, 0xc7U, (uint8_t)(rdseed ? 0xf8U : 0xf0U)};
+    const uint32_t arithmetic_flags = UINT32_C(0x8d5);
+    const uint8_t *instruction = word ? code : code + 1U;
+    const size_t instruction_size = word ? sizeof(code) : sizeof(code) - 1U;
+    struct gem_memory *memory = make_memory(instruction, instruction_size, GEM_GUEST_PAGE_SIZE);
+    struct gem_i386_runtime *runtime = make_runtime(memory, mode, instruction_size);
+    struct gem_i386_engine_info info = {0};
+    struct gem_i386_context context;
+    unsigned iteration;
+    assert(runtime != NULL);
+    for (iteration = 0U; iteration < 2U; ++iteration) {
+        initialize(&context, DATA, 0U);
+        context.gpr[GEM_I386_EAX] = UINT32_C(0xdeadbeef);
+        context.eflags |= arithmetic_flags;
+        assert(gem_i386_runtime_run(runtime, &context, 1U) == GEM_STOP_HOST_RETURN);
+        assert((context.eflags & arithmetic_flags) == UINT32_C(0x001));
+        if (word)
+            assert((context.gpr[GEM_I386_EAX] & UINT32_C(0xffff0000)) == UINT32_C(0xdead0000));
+    }
+    info.abi_version = 1U;
+    info.size = sizeof(info);
+    assert(gem_i386_runtime_engine_info(runtime, &info));
+    if (mode == GEM_I386_ENGINE_JIT)
+        assert(info.jit_executions == 2U && info.jit_failures == 0U);
+    else
+        assert(info.jit_executions == 0U);
+    gem_i386_runtime_destroy(runtime);
+    gem_memory_destroy(memory);
+}
+
+static void exercise_random_instructions(enum gem_i386_engine_mode mode) {
+    run_random_case(mode, false, false);
+    run_random_case(mode, false, true);
+    run_random_case(mode, true, false);
+    run_random_case(mode, true, true);
+}
+
 static void exercise_promoted128(enum gem_i386_engine_mode mode, const uint8_t *code,
                                  size_t code_size, unsigned operation) {
     struct gem_memory *memory = make_memory(code, code_size, GEM_GUEST_PAGE_SIZE);
@@ -1863,6 +1901,8 @@ int main(void) {
     exercise_fma_inventory(GEM_I386_ENGINE_JIT);
     exercise_adx(GEM_I386_ENGINE_INTERPRETER);
     exercise_adx(GEM_I386_ENGINE_JIT);
+    exercise_random_instructions(GEM_I386_ENGINE_INTERPRETER);
+    exercise_random_instructions(GEM_I386_ENGINE_JIT);
     exercise_promoted128(GEM_I386_ENGINE_INTERPRETER, vpaddd_xmm, sizeof(vpaddd_xmm), 0U);
     exercise_promoted128(GEM_I386_ENGINE_JIT, vpaddd_xmm, sizeof(vpaddd_xmm), 0U);
     exercise_vmovhlps(GEM_I386_ENGINE_INTERPRETER);

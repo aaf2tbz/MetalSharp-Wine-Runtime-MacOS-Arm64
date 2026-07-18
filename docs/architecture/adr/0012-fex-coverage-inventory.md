@@ -233,6 +233,15 @@ The selected guest is i386 legacy32 (Windows WoW64):
   fail-closed. Patch 0042 advertises leaf 7 ECX bit 22 after a loaded program
   reads TSC_AUX and stores it through both engines with zero JIT fallback. The
   returned value is the profile's deterministic TSC_AUX zero, matching RDTSCP.
+- RDRAND and RDSEED each have applicable legacy16 and legacy32 register forms.
+  Patch 0043 deliberately admits only the no-REP forms, retains invalid prefix
+  encodings as unsupported, and fixes Blink's incomplete flag behavior: every
+  successful result sets CF and clears OF, SF, ZF, AF, and PF. The handlers use
+  native host entropy, so the value itself is intentionally not forced to
+  match an external oracle or the other engine run. Qualification instead
+  proves width semantics, repeated cached JIT execution with zero fallback,
+  all defined flags, and a loaded program that obtains and stores both values.
+  Patch 0044 atomically advertises leaf 1 ECX RDRAND and leaf 7 EBX RDSEED.
 
 ## Acceptance authority
 

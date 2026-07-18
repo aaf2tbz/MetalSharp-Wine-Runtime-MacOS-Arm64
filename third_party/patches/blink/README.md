@@ -304,3 +304,15 @@ TSC_AUX profile value zero as RDTSCP.
 `61b0ab0edf8ee4209594422f485303cee647df7dee2ff99dbf014826f3a57e36`)
 advertises RDPID only after a loaded two-instruction guest program reads and
 stores TSC_AUX in both interpreter and JIT with zero fallback.
+
+`0043-gem-i386-random.patch` (SHA-256
+`818a706e343d97b6df7a05f52b6ccdb3e3d9dd64fff7ab2bef5379a090093424`)
+admits exact legacy16/32 RDRAND and RDSEED forms and fixes Blink's success path
+to clear OF, SF, ZF, AF, and PF while setting CF, as Intel requires. Host
+entropy remains intentionally nondeterministic and invalid prefixes stay
+fail-closed.
+
+`0044-gem-i386-random-cpuid.patch` (SHA-256
+`399d53904eb3b6320683525f44c0daf760ae81f476467a1fee4f5b683a567492`)
+advertises RDRAND and RDSEED after 16/32-bit width, repeated cache-path,
+interpreter/JIT, flag, and loaded four-instruction guest-program gates pass.
