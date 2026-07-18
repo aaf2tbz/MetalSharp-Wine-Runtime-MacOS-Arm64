@@ -195,3 +195,10 @@ VPERM2F128, VINSERTF128/VEXTRACTF128, VTEST/VPTEST, and four-operand variable
 blend semantics. Sources are snapshotted before overlapping destinations,
 memory widths remain exact at page boundaries, and every form shares the
 portable interpreter/JIT transaction helper.
+
+`0027-gem-i386-avx-immediate-shifts.patch` (SHA-256
+`6a11c3380635dab199df279235854fe484baee4a1970401ceb73409bd8a8324a`)
+implements VEX.128 packed logical, arithmetic, and byte-lane immediate shifts.
+The opcode-extension and VEX destination fields are handled independently,
+over-wide counts follow the architectural zero/sign-fill rules, and every
+result clears its YMM upper half in both execution engines.
