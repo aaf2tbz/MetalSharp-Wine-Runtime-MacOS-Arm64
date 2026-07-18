@@ -102,6 +102,7 @@ enum gem_stop_reason gem_i386_runtime_run(struct gem_i386_runtime *runtime,
                                           struct gem_i386_context *context, uint64_t budget) {
     enum gem_stop_reason reason = GEM_STOP_BUDGET_EXPIRED;
     uint64_t retired = 0U;
+    bool sync_required = true;
     if (runtime == NULL)
         return GEM_STOP_INVARIANT_VIOLATION;
     memset(&runtime->last_stop, 0, sizeof(runtime->last_stop));
@@ -131,12 +132,16 @@ enum gem_stop_reason gem_i386_runtime_run(struct gem_i386_runtime *runtime,
             reason = GEM_STOP_INVARIANT_VIOLATION;
             break;
         }
-        runtime->ops->sync(runtime);
+        if (sync_required) {
+            runtime->ops->sync(runtime);
+            sync_required = false;
+        }
         ++runtime->performance.quanta;
         ++runtime->performance.decode_resets;
         reason = runtime->ops->run(runtime, context, &output, quantum_budget, &quantum_retired);
         transaction_error = gem_memory_transaction_finish(runtime->transaction, &transaction_fault);
         if (transaction_error == GEM_MEMORY_CONFLICT) {
+            sync_required = true;
             output = quantum_input;
             quantum_retired = 0U;
             runtime->last_stop.fault_address = (uint32_t)transaction_fault;

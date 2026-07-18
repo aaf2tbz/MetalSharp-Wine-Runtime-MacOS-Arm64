@@ -231,22 +231,25 @@
  }
  static int end_quantum_after_instruction(struct blink_gem_machine* g) {
    uint64_t page, end;
-@@ -510,6 +641,14 @@
+@@ -510,6 +641,17 @@
    uint32_t error = 0;
    if (!g) return;
    for (i = 0; i < g->page_count;) {
 +    if (g->pages[i].protection & 16) {
-+      if ((g->pages[i].protection & 2) && !(g->pages[i].protection & 4)) {
++      if ((g->pages[i].protection & 2) &&
++          !(g->pages[i].protection & 4)) {
 +        drop_page(g, i);
 +        continue;
 +      }
-+      ++i;
-+      continue;
++      if (!(g->pages[i].protection & 2)) {
++        ++i;
++        continue;
++      }
 +    }
      if (reconcile_page(g, g->pages + i, &error) < 0) {
        drop_page(g, i);
        continue;
-@@ -906,6 +1045,8 @@
+@@ -906,6 +1051,8 @@
      for (i = 0; i < nwrites; ++i) {
        struct shadow_page* p = find_page(g, writes[i].address);
        if (!p) return result(BLINK_GEM_INVALID);

@@ -392,6 +392,17 @@ if(BUILD_TESTING)
         add_test(NAME gem.wine_i386_bridge_conformance COMMAND wine_i386_bridge_conformance)
         set_tests_properties(gem.wine_i386_bridge_conformance PROPERTIES
             LABELS "i386;zero-rosetta;wine-bridge;production-jit")
+
+        add_executable(wine_i386_bridge_interpreter_conformance
+            tests/wine_i386_bridge_conformance.c)
+        target_compile_definitions(wine_i386_bridge_interpreter_conformance PRIVATE
+            GEM_WINE_I386_TEST_INTERPRETER=1)
+        target_link_libraries(wine_i386_bridge_interpreter_conformance PRIVATE metalsharp_gem_wine)
+        mswr_enable_warnings(wine_i386_bridge_interpreter_conformance)
+        add_test(NAME gem.wine_i386_bridge_interpreter_conformance
+            COMMAND wine_i386_bridge_interpreter_conformance)
+        set_tests_properties(gem.wine_i386_bridge_interpreter_conformance PROPERTIES
+            LABELS "i386;zero-rosetta;wine-bridge;interpreter-oracle")
     endif()
 
     if(MSWR_X64_ENGINE_CONFORMANCE)
@@ -634,6 +645,7 @@ if(BUILD_TESTING)
         i386_phase3_conformance i386_phase4_conformance i386_phase5_ci
         memory_page_isolation_test macos_tso_api_probe
         arm64ec_engine_conformance wine_bridge_conformance wine_i386_bridge_conformance
+        wine_i386_bridge_interpreter_conformance
         x64_engine_conformance
         x86_64_jit_conformance wine_x86_64_bridge_conformance
         arm64x_roundtrip_conformance wine_arm64x_conformance

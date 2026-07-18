@@ -163,6 +163,9 @@ int main(void) {
     i386_config.windows_syscall_boundary = UINT32_C(0x7ffe1000);
     i386_config.unix_call_boundary = UINT32_C(0x7ffe1010);
     i386_config.host_return_sentinel = HOST_RETURN;
+#if defined(GEM_WINE_I386_TEST_INTERPRETER)
+    i386_config.flags = GEM_WINE_I386_FLAG_INTERPRETER_ORACLE;
+#endif
     make_pe32(image, UINT16_C(0x8664));
     assert(gem_wine_process_prepare_i386(process, &i386_config) == GEM_WINE_INVALID_ARGUMENT);
     make_pe32(image, UINT16_C(0x014c));
@@ -195,8 +198,13 @@ int main(void) {
     assert(output.gpr[GEM_I386_EAX] == UINT32_C(0x12345679));
     assert(output.eip == HOST_RETURN);
     assert(gem_wine_i386_thread_diagnostics(thread, &diagnostics) == GEM_WINE_OK);
+#if defined(GEM_WINE_I386_TEST_INTERPRETER)
+    assert(diagnostics.engine_mode == GEM_I386_ENGINE_INTERPRETER &&
+           diagnostics.jit_executions == 0U && diagnostics.jit_failures == 0U);
+#else
     assert(diagnostics.engine_mode == GEM_I386_ENGINE_JIT);
     assert(diagnostics.jit_executions != 0U && diagnostics.jit_failures == 0U);
+#endif
     assert(diagnostics.interpreter_fallbacks == 0U);
 
     {
@@ -352,7 +360,7 @@ int main(void) {
                GEM_WINE_OK);
         assert(gem_wine_process_commit_i386_host(process, external_data, host,
                                                  GEM_WINE_GUEST_PAGE_SIZE,
-                                                 GEM_WINE_PAGE_READWRITE) == GEM_WINE_OK);
+                                                 GEM_WINE_PAGE_EXECUTE_READWRITE) == GEM_WINE_OK);
         memcpy(image + 0x1000U, external_load_code, sizeof(external_load_code));
         assert(gem_wine_process_invalidate_code(process, CODE_ADDRESS,
                                                 sizeof(external_load_code)) == GEM_WINE_OK);
@@ -362,10 +370,27 @@ int main(void) {
         assert(result.outcome == GEM_WINE_RUN_COMPLETE);
         assert(output.gpr[GEM_I386_EAX] == UINT32_C(2));
 
+        {
+            static const uint8_t external_store_code[] = {0xa3U, 0x00U, 0x00U,
+                                                          0x60U, 0x00U, /* mov [0x00600000],eax */
+                                                          0x90U, 0x90U, 0x90U};
+            memcpy(image + 0x1000U, external_store_code, sizeof(external_store_code));
+            assert(gem_wine_process_invalidate_code(process, CODE_ADDRESS,
+                                                    sizeof(external_store_code)) == GEM_WINE_OK);
+            input.eip = CODE_ADDRESS;
+            input.gpr[GEM_I386_EAX] = UINT32_C(7);
+            input.stop_reason = GEM_STOP_NONE;
+            assert(gem_wine_i386_thread_run(thread, &input, &output, &result) == GEM_WINE_OK);
+            assert(result.outcome == GEM_WINE_RUN_COMPLETE && *host == UINT32_C(7));
+        }
+
         /* Host callbacks may mutate writable external pages without going
          * through the guest memory API.  The next checked run must refresh
          * that data while retaining the separately invalidated code page. */
         *host = UINT32_C(41);
+        memcpy(image + 0x1000U, external_load_code, sizeof(external_load_code));
+        assert(gem_wine_process_invalidate_code(process, CODE_ADDRESS,
+                                                sizeof(external_load_code)) == GEM_WINE_OK);
         input.eip = CODE_ADDRESS;
         input.stop_reason = GEM_STOP_NONE;
         assert(gem_wine_i386_thread_run(thread, &input, &output, &result) == GEM_WINE_OK);
