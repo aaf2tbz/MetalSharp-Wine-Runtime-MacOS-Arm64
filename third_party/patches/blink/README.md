@@ -293,3 +293,14 @@ register and memory forms with both carry-in states.
 advertises ADX after exact independent-chain semantics, register/memory forms,
 interpreter/JIT parity, invalid-encoding rejection, and a loaded eight-
 instruction guest program all pass on native macOS ARM64.
+
+`0041-gem-i386-rdpid.patch` (SHA-256
+`a1f18dfb18ab3b26198616cb0bce9b33e011f4130703d6095e649211c1407dbc`)
+admits the exact legacy32 `F3 0F C7 /7` RDPID form while RDRAND, RDSEED, and
+invalid prefix forms remain masked. RDPID returns the same deterministic
+TSC_AUX profile value zero as RDTSCP.
+
+`0042-gem-i386-rdpid-cpuid.patch` (SHA-256
+`61b0ab0edf8ee4209594422f485303cee647df7dee2ff99dbf014826f3a57e36`)
+advertises RDPID only after a loaded two-instruction guest program reads and
+stores TSC_AUX in both interpreter and JIT with zero fallback.

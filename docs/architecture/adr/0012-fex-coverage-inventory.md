@@ -136,6 +136,11 @@ The selected guest is i386 legacy32 (Windows WoW64):
   the x86_64 engine adopts it (its corpus tooling and the FEX lowering
   evidence above apply there) is a separate, later decision and is not phase 6
   scope creep.
+- Intel XED marks every RDFSBASE, RDGSBASE, WRFSBASE, and WRGSBASE pattern
+  `mode64`. FSGSBASE is therefore not encodable in the selected legacy32 guest
+  and is recorded as not applicable rather than force-enabled through Blink's
+  long-mode handlers. Its CPUID bit remains clear; x86_64 adoption is outside
+  this i386 phase.
 - Every CPUID unmask is atomic across three artifacts: the Blink `cpuid.c`
   patch (with its new SHA-256 in `cmake/patch-blink-gem.cmake`),
   `i386-phase3-capabilities.json`, and the expected sets in
@@ -222,6 +227,12 @@ The selected guest is i386 legacy32 (Windows WoW64):
   JIT failures, and atomically advertises ADX in CPUID leaf 7 and manifest v8.
   This is native capability recovered from an overly broad mask, not inherited
   from the comparison oracle.
+- RDPID has one applicable legacy32 pattern in pinned XED (`not64`, GPR32).
+  Patch 0041 narrows the old `/6-or-/7` mask so exact `F3 0F C7 /7` reaches
+  Blink's portable handler while RDRAND, RDSEED, and invalid prefixes remain
+  fail-closed. Patch 0042 advertises leaf 7 ECX bit 22 after a loaded program
+  reads TSC_AUX and stores it through both engines with zero JIT fallback. The
+  returned value is the profile's deterministic TSC_AUX zero, matching RDTSCP.
 
 ## Acceptance authority
 

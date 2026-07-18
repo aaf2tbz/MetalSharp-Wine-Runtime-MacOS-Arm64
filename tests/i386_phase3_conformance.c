@@ -226,6 +226,7 @@ static void verify_cpuid_profile(void) {
                    (1U << 26U))) != 0U);
     assert(leaf7.record.final.gpr[GEM_I386_EBX] ==
            ((1U << 3U) | (1U << 5U) | (1U << 8U) | (1U << 9U) | (1U << 19U)));
+    assert(leaf7.record.final.gpr[GEM_I386_ECX] == (1U << 22U));
     assert((ext.record.final.gpr[GEM_I386_EDX] & (1U << 27U)) != 0U);
     assert((ext.record.final.gpr[GEM_I386_EDX] & ((1U << 11U) | (1U << 29U))) == 0U);
 }
@@ -980,6 +981,56 @@ static void verify_adx_guest_program(enum gem_i386_engine_mode mode) {
     gem_memory_destroy(memory);
 }
 
+static void verify_rdpid_guest_program(enum gem_i386_engine_mode mode) {
+    static const uint8_t code[] = {
+        0xf3U, 0x0fU, 0xc7U, 0xf8U, /* rdpid eax */
+        0x89U, 0x07U                /* mov [edi],eax */
+    };
+    struct gem_i386_runtime_config config = {0};
+    struct gem_i386_stop_info stop = {0};
+    struct gem_i386_engine_info info = {0};
+    struct gem_i386_context context;
+    struct gem_i386_runtime *runtime;
+    enum gem_stop_reason reason;
+    struct gem_memory *memory = gem_memory_create();
+    uint32_t output = UINT32_MAX;
+    uint32_t address = CODE;
+    assert(memory != NULL);
+    assert(gem_i386_memory_reserve(memory, &address, GEM_GUEST_PAGE_SIZE) == GEM_MEMORY_OK);
+    assert(gem_i386_memory_commit(memory, CODE, GEM_GUEST_PAGE_SIZE, GEM_PAGE_EXECUTE_READWRITE) ==
+           GEM_MEMORY_OK);
+    assert(gem_i386_memory_write(memory, CODE, code, sizeof(code)) == GEM_MEMORY_OK);
+    address = DATA;
+    assert(gem_i386_memory_reserve(memory, &address, GEM_GUEST_PAGE_SIZE) == GEM_MEMORY_OK);
+    assert(gem_i386_memory_commit(memory, DATA, GEM_GUEST_PAGE_SIZE, GEM_PAGE_READWRITE) ==
+           GEM_MEMORY_OK);
+    config.engine_mode = mode;
+    config.host_return_sentinel = CODE + (uint32_t)sizeof(code);
+    config.max_budget = 3U;
+    runtime = gem_i386_runtime_create(memory, &config);
+    assert(runtime != NULL);
+    gem_i386_context_initialize(&context, UINT32_C(0x7ffde000));
+    context.eip = CODE;
+    context.gpr[GEM_I386_EDI] = DATA;
+    reason = gem_i386_runtime_run(runtime, &context, 3U);
+    assert(gem_i386_runtime_last_stop_info(runtime, &stop));
+    assert(reason == GEM_STOP_HOST_RETURN);
+    assert(stop.instructions_retired == 2U);
+    assert(context.eip == CODE + sizeof(code));
+    assert(context.gpr[GEM_I386_EAX] == 0U);
+    assert(gem_i386_memory_read(memory, DATA, &output, sizeof(output)) == GEM_MEMORY_OK);
+    assert(output == 0U);
+    info.abi_version = 1U;
+    info.size = sizeof(info);
+    assert(gem_i386_runtime_engine_info(runtime, &info));
+    if (mode == GEM_I386_ENGINE_JIT)
+        assert(info.jit_executions == 2U && info.jit_failures == 0U);
+    else
+        assert(info.jit_executions == 0U);
+    gem_i386_runtime_destroy(runtime);
+    gem_memory_destroy(memory);
+}
+
 static void expect_masked_instruction(const uint8_t *code, size_t code_size) {
     const enum gem_i386_engine_mode modes[] = {GEM_I386_ENGINE_INTERPRETER, GEM_I386_ENGINE_JIT};
     unsigned int mode_index;
@@ -1027,13 +1078,11 @@ static void verify_masked_instructions(void) {
     static const uint8_t invalid_legacy_bmi2[] = {0x0fU, 0x38U, 0xf5U, 0xd8U};
     static const uint8_t rdrand[] = {0x0fU, 0xc7U, 0xf0U};
     static const uint8_t rdseed[] = {0x0fU, 0xc7U, 0xf8U};
-    static const uint8_t rdpid[] = {0xf3U, 0x0fU, 0xc7U, 0xf8U};
     static const uint8_t fsgsbase[] = {0xf3U, 0x0fU, 0xaeU, 0xc0U};
     expect_masked_instruction(invalid_bmi2_prefix, sizeof(invalid_bmi2_prefix));
     expect_masked_instruction(invalid_legacy_bmi2, sizeof(invalid_legacy_bmi2));
     expect_masked_instruction(rdrand, sizeof(rdrand));
     expect_masked_instruction(rdseed, sizeof(rdseed));
-    expect_masked_instruction(rdpid, sizeof(rdpid));
     expect_masked_instruction(fsgsbase, sizeof(fsgsbase));
 }
 
@@ -1184,6 +1233,8 @@ int main(void) {
     verify_fma_guest_program(GEM_I386_ENGINE_JIT);
     verify_adx_guest_program(GEM_I386_ENGINE_INTERPRETER);
     verify_adx_guest_program(GEM_I386_ENGINE_JIT);
+    verify_rdpid_guest_program(GEM_I386_ENGINE_INTERPRETER);
+    verify_rdpid_guest_program(GEM_I386_ENGINE_JIT);
     verify_masked_instructions();
     assert(capture_reference || fgetc(reference_file) == EOF);
     assert(fclose(reference_file) == 0);

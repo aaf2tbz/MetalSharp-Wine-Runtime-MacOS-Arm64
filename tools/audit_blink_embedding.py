@@ -322,6 +322,7 @@ def audit_phase3_capabilities(source_root, manifest_path, corpus_path):
         ("FMA", "0x00000001", "ecx", 12),
         ("AVX2", "0x00000007", "ebx", 5),
         ("ADX", "0x00000007", "ebx", 19),
+        ("RDPID", "0x00000007", "ecx", 22),
         ("ERMS", "0x00000007", "ebx", 9),
         ("BMI1", "0x00000007", "ebx", 3),
         ("BMI2", "0x00000007", "ebx", 8),
@@ -332,7 +333,7 @@ def audit_phase3_capabilities(source_root, manifest_path, corpus_path):
     need(actual == expected, "advertised CPUID capability drift")
     need(
         set(manifest["masked"])
-        == {"FSGSBASE", "RDRAND", "RDSEED", "RDPID", "CX16",
+        == {"FSGSBASE", "RDRAND", "RDSEED", "CX16",
             "LONG_MODE", "SYSCALL"},
         "masked CPUID capability drift",
     )
@@ -408,13 +409,15 @@ def main():
     parser.add_argument("--fma-cpuid-patch", type=Path, required=True)
     parser.add_argument("--adx-patch", type=Path, required=True)
     parser.add_argument("--adx-cpuid-patch", type=Path, required=True)
+    parser.add_argument("--rdpid-patch", type=Path, required=True)
+    parser.add_argument("--rdpid-cpuid-patch", type=Path, required=True)
     parser.add_argument("--capability-manifest", type=Path, required=True)
     parser.add_argument("--phase3-corpus", type=Path, required=True)
     parser.add_argument("--provenance", type=Path, required=True)
     args = parser.parse_args()
 
     provenance = json.loads(args.provenance.read_text())
-    need(provenance["schemaVersion"] == 37, "provenance schema")
+    need(provenance["schemaVersion"] == 39, "provenance schema")
     need(provenance["revision"] == PINNED_REVISION, "revision")
     need(digest(args.patch) == provenance["patchSha256"], "patch hash")
     need(digest(args.jit_patch) == provenance["jitPatchSha256"], "JIT patch hash")
@@ -531,6 +534,11 @@ def main():
     need(
         digest(args.adx_cpuid_patch) == provenance["adxCpuidPatchSha256"],
         "ADX CPUID patch hash",
+    )
+    need(digest(args.rdpid_patch) == provenance["rdpidPatchSha256"], "RDPID patch hash")
+    need(
+        digest(args.rdpid_cpuid_patch) == provenance["rdpidCpuidPatchSha256"],
+        "RDPID CPUID patch hash",
     )
     for relative, expected_hash in provenance["postPatch"].items():
         need(digest(args.source / relative) == expected_hash, f"hash {relative}")

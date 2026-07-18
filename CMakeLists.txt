@@ -199,6 +199,8 @@ if(MSWR_ENABLE_X64_ENGINE OR MSWR_ENABLE_I386_ENGINE)
         --fma-cpuid-patch "${CMAKE_CURRENT_SOURCE_DIR}/third_party/patches/blink/0038-gem-i386-fma-cpuid.patch"
         --adx-patch "${CMAKE_CURRENT_SOURCE_DIR}/third_party/patches/blink/0039-gem-i386-adx.patch"
         --adx-cpuid-patch "${CMAKE_CURRENT_SOURCE_DIR}/third_party/patches/blink/0040-gem-i386-adx-cpuid.patch"
+        --rdpid-patch "${CMAKE_CURRENT_SOURCE_DIR}/third_party/patches/blink/0041-gem-i386-rdpid.patch"
+        --rdpid-cpuid-patch "${CMAKE_CURRENT_SOURCE_DIR}/third_party/patches/blink/0042-gem-i386-rdpid-cpuid.patch"
         --capability-manifest "${CMAKE_CURRENT_SOURCE_DIR}/docs/architecture/adr/i386-phase3-capabilities.json"
         --phase3-corpus "${CMAKE_CURRENT_SOURCE_DIR}/tests/i386_phase3_conformance.c"
         --provenance "${CMAKE_CURRENT_SOURCE_DIR}/docs/architecture/adr/0008-blink-embedding.provenance.json"
