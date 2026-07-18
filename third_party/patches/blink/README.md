@@ -147,3 +147,10 @@ checks keep ADX, 256-bit encodings, and legacy aliases fail-closed. BMI2 is
 advertised from SharpWine's deterministic CPUID profile after native semantic,
 state, fault, corpus, and program-loading qualification; an external runtime
 that lacks BMI2 is retained only as non-authoritative comparison evidence.
+
+`0021-gem-i386-rdtscp.patch` (SHA-256
+`b85442976c2b6cc12e0ba3674793822d9e0791da8b7dfe60154517d61eb8fd87`)
+advertises RDTSCP after the GEM adapter qualifies its deterministic virtual
+timestamp implementation. The host-backed Blink handler remains excluded;
+SharpWine returns the committed retired-instruction counter in EDX:EAX and a
+fixed guest TSC_AUX of zero in ECX in both interpreter and JIT modes.

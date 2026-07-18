@@ -270,15 +270,24 @@ static bool is_virtual_rdtsc(const struct blink_gem_decode_attempt *attempt) {
            strcmp(attempt->name, "OpRdtsc") == 0;
 }
 
-static bool complete_virtual_rdtsc(struct gem_i386_runtime *runtime,
-                                   struct gem_i386_context *context, uint32_t instruction_length,
-                                   uint32_t budget, uint32_t *retired) {
+static bool is_virtual_rdtscp(const struct blink_gem_decode_attempt *attempt) {
+    return attempt->valid != 0U && attempt->mopcode == UINT32_C(0x101) &&
+           attempt->instruction_length >= 3U && attempt->instruction_length <= 15U &&
+           strcmp(attempt->name, "Op101") == 0;
+}
+
+static bool complete_virtual_timestamp(struct gem_i386_runtime *runtime,
+                                       struct gem_i386_context *context,
+                                       uint32_t instruction_length, uint32_t budget,
+                                       uint32_t *retired, bool with_aux) {
     uint64_t timestamp;
     if (*retired >= budget)
         return false;
     timestamp = runtime->virtual_tsc + *retired;
     context->gpr[GEM_I386_EAX] = (uint32_t)timestamp;
     context->gpr[GEM_I386_EDX] = (uint32_t)(timestamp >> 32);
+    if (with_aux)
+        context->gpr[GEM_I386_ECX] = 0U;
     context->eip += instruction_length;
     ++*retired;
     return true;
@@ -364,10 +373,11 @@ enum gem_stop_reason gem_i386_blink_step(struct gem_i386_runtime *runtime,
         attempt.size = sizeof(attempt);
         if (!blink_gem_machine_decode_attempt_info(runtime->backend, &attempt) || !attempt.valid)
             return GEM_STOP_UNSUPPORTED_INSTRUCTION;
-        if (is_virtual_rdtsc(&attempt)) {
+        if (is_virtual_rdtsc(&attempt) || is_virtual_rdtscp(&attempt)) {
             *out = *in;
             ++runtime->performance.state_exports;
-            return complete_virtual_rdtsc(runtime, out, attempt.instruction_length, 1U, retired)
+            return complete_virtual_timestamp(runtime, out, attempt.instruction_length, 1U, retired,
+                                              is_virtual_rdtscp(&attempt))
                        ? GEM_STOP_NONE
                        : GEM_STOP_INVARIANT_VIOLATION;
         }
@@ -486,12 +496,13 @@ enum gem_stop_reason gem_i386_blink_run(struct gem_i386_runtime *runtime,
         attempt.size = sizeof(attempt);
         if (!blink_gem_machine_decode_attempt_info(runtime->backend, &attempt) || !attempt.valid)
             return GEM_STOP_UNSUPPORTED_INSTRUCTION;
-        if (is_virtual_rdtsc(&attempt)) {
+        if (is_virtual_rdtsc(&attempt) || is_virtual_rdtscp(&attempt)) {
             if (result.retired == 0U) {
                 *out = *in;
                 ++runtime->performance.state_exports;
             }
-            if (!complete_virtual_rdtsc(runtime, out, attempt.instruction_length, budget, retired))
+            if (!complete_virtual_timestamp(runtime, out, attempt.instruction_length, budget,
+                                            retired, is_virtual_rdtscp(&attempt)))
                 return GEM_STOP_INVARIANT_VIOLATION;
             if (out->eip == runtime->config.host_return_sentinel)
                 return GEM_STOP_HOST_RETURN;

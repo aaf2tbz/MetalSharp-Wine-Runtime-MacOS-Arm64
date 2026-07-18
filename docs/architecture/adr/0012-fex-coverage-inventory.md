@@ -167,6 +167,15 @@ The selected guest is i386 legacy32 (Windows WoW64):
   program in both engines, and the complete 65,536-case corpus replay. BMI2 is
   therefore advertised from SharpWine's native macOS ARM64 profile; Prism's
   missing family is retained only as comparison evidence.
+- The VM does execute RDTSCP and returned TSC_AUX zero in the direct i386
+  attempt, but its wall-clock-derived EDX:EAX value is intentionally not the
+  semantic authority for SharpWine's deterministic policy. SharpWine keeps
+  Blink's host-counter handler outside the legacy boundary and completes
+  RDTSCP in the GEM adapter using the epoch-zero committed-retired counter,
+  with fixed TSC_AUX zero. Prefixed instruction length, one-step execution,
+  whole/split quantum equality, interpreter/JIT parity, and both 65,536-case
+  golden replays pass. RDTSCP is therefore advertised without importing host
+  timing nondeterminism.
 
 ## Acceptance authority
 

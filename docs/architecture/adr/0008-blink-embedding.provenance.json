@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 17,
+  "schemaVersion": 18,
   "revision": "f006a4fc6f9b8de9272504fdff0dbbe5ce5dc580",
   "archiveSha256": "e0bad68ba2927a1ca1d53537afee1644e11a1e683d26676a36e5b9b17a63d6af",
   "patchSha256": "36774371e862c7a44775b19d16b130c23ab0beccf223d755b0321225c7fbfd03",
@@ -18,6 +18,7 @@
   "phase55ConcurrencyPatchSha256": "cd4894556b28691082307bb23d74a83d51073e63dee329cd8f66384734e49c4f",
   "bmi1PatchSha256": "2258dcb91a84b534a4cf2d9efd9845b892e323bc5dfba692a0d33dc82e1ba88f",
   "bmi2PatchSha256": "18910ef86f5031d8f244061d5e713c211d7a3b655a2df10f5d7b57712d2fa465",
+  "rdtscpPatchSha256": "b85442976c2b6cc12e0ba3674793822d9e0791da8b7dfe60154517d61eb8fd87",
   "license": "ISC",
   "prePatch": {
     "blink/machine.c": "73a32c95fbc191394c116bd2f41ebba464c963718b3785adaca22c5a93e8dc89",
@@ -32,7 +33,7 @@
     "blink/machine.c": "4d7e225b3cdf471e71206cf6fbf354bc388d8825e313e88300ac91f75499b623",
     "blink/legacy.c": "0dd21523bed5b9fa731a69e3b376d1c28800ada3a7c36668aace4832c0bb8cfe",
     "blink/machine.h": "19fac6994b34f82707a0cb77179a900a2edc3c84de2d95932863f9c256098d55",
-    "blink/cpuid.c": "14e0cca23b52ba09480612c1cd2ef722efcc695f5cc8521e86e2043d930a554f",
+    "blink/cpuid.c": "1efa08341e5b11ca805026722fc0ddaf14f0cfc85a532720b190e2e7975b38e4",
     "blink/bmi2.c": "b42bf00d008ac5f1af2ec71eabdb5158123223787d8c8d7787775887d807b668",
     "blink/alu.c": "79d740ce4a1519d06f672d639f6bbcd85d9f7b232224e7521e9eed98f29c30be",
     "blink/cmpxchg.c": "ef2522645c555fce5f9e0a7919886bd9ad8ebaf8a425aada3f40ddcaeae200d7",

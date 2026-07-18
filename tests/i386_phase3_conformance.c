@@ -224,7 +224,8 @@ static void verify_cpuid_profile(void) {
     assert((edx & ((1U << 0U) | (1U << 8U) | (1U << 15U) | (1U << 23U) | (1U << 24U) | (1U << 25U) |
                    (1U << 26U))) != 0U);
     assert(leaf7.record.final.gpr[GEM_I386_EBX] == ((1U << 3U) | (1U << 8U) | (1U << 9U)));
-    assert((ext.record.final.gpr[GEM_I386_EDX] & ((1U << 11U) | (1U << 27U) | (1U << 29U))) == 0U);
+    assert((ext.record.final.gpr[GEM_I386_EDX] & (1U << 27U)) != 0U);
+    assert((ext.record.final.gpr[GEM_I386_EDX] & ((1U << 11U) | (1U << 29U))) == 0U);
 }
 
 static uint32_t bmi1_flags(uint32_t result, uint32_t carry) {
@@ -403,6 +404,29 @@ static void verify_bmi2_instructions(void) {
             assert((interpreter.record.final.eflags & UINT32_C(0x8d5)) ==
                    (interpreter.record.initial.eflags & UINT32_C(0x8d5)));
     }
+}
+
+static void verify_rdtscp_instruction(void) {
+    static const uint8_t rdtscp[] = {0x66U, 0x0fU, 0x01U, 0xf9U};
+    const uint32_t case_id = UINT32_C(0x1400);
+    const struct execution interpreter = execute_case(GEM_I386_ENGINE_INTERPRETER, case_id,
+                                                      I386_PHASE3_SIMD, rdtscp, sizeof(rdtscp));
+    const struct execution jit =
+        execute_case(GEM_I386_ENGINE_JIT, case_id, I386_PHASE3_SIMD, rdtscp, sizeof(rdtscp));
+    assert(memcmp(&interpreter.record.final, &jit.record.final, sizeof(interpreter.record.final)) ==
+           0);
+    assert(interpreter.record.stop_reason == GEM_STOP_HOST_RETURN);
+    assert(jit.record.stop_reason == GEM_STOP_HOST_RETURN);
+    assert(interpreter.record.retired_count == 1U && jit.record.retired_count == 1U);
+    assert(interpreter.record.final.gpr[GEM_I386_EAX] == 0U);
+    assert(interpreter.record.final.gpr[GEM_I386_EDX] == 0U);
+    assert(interpreter.record.final.gpr[GEM_I386_ECX] == 0U);
+    assert((interpreter.record.final.eflags & UINT32_C(0x8d5)) ==
+           (interpreter.record.initial.eflags & UINT32_C(0x8d5)));
+    assert(interpreter.info.jit_executions == 0U);
+    /* Adapter-owned serializing instructions deliberately terminate a Blink
+     * path; the JIT still owns the decoded attempt and reports no fallback. */
+    assert(jit.info.jit_executions == 0U && jit.info.jit_failures == 0U);
 }
 
 static void verify_legacy_state_semantics(void) {
@@ -773,7 +797,6 @@ static void verify_masked_instructions(void) {
     static const uint8_t rdseed[] = {0x0fU, 0xc7U, 0xf8U};
     static const uint8_t rdpid[] = {0xf3U, 0x0fU, 0xc7U, 0xf8U};
     static const uint8_t fsgsbase[] = {0xf3U, 0x0fU, 0xaeU, 0xc0U};
-    static const uint8_t rdtscp[] = {0x0fU, 0x01U, 0xf9U};
     expect_masked_instruction(avx, sizeof(avx));
     expect_masked_instruction(avx2, sizeof(avx2));
     expect_masked_instruction(fma, sizeof(fma));
@@ -784,7 +807,6 @@ static void verify_masked_instructions(void) {
     expect_masked_instruction(rdseed, sizeof(rdseed));
     expect_masked_instruction(rdpid, sizeof(rdpid));
     expect_masked_instruction(fsgsbase, sizeof(fsgsbase));
-    expect_masked_instruction(rdtscp, sizeof(rdtscp));
 }
 
 int main(void) {
@@ -910,6 +932,7 @@ int main(void) {
     verify_cpuid_profile();
     verify_bmi1_instructions();
     verify_bmi2_instructions();
+    verify_rdtscp_instruction();
     verify_legacy_state_semantics();
     verify_restartable_rep(GEM_I386_ENGINE_INTERPRETER);
     verify_restartable_rep(GEM_I386_ENGINE_JIT);
